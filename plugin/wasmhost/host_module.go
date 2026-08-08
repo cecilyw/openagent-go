@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/tetratelabs/wazero"
@@ -17,6 +19,10 @@ import (
 //	keyring_get(service_ptr, service_len, key_ptr, key_len) → packed(json)
 //	keyring_set(service_ptr, service_len, key_ptr, key_len, val_ptr, val_len) → packed(json)
 //	keyring_delete(service_ptr, service_len, key_ptr, key_len) → packed(json)
+//	env_get(key_ptr, key_len) → packed(json)   // {"value":"...","error":""}
+//	env_set(key_ptr, key_len, val_ptr, val_len) → packed(json)
+//	env_unset(key_ptr, key_len) → packed(json)
+//	env_list() → packed(json)                  // {"env":[{"key":"...","value":"..."},...],"error":""}
 //	http_request(method_ptr, method_len, url_ptr, url_len,
 //	             headers_ptr, headers_len, body_ptr, body_len) → packed(json)
 //	fs_read(path_ptr, path_len) → packed(json)   // {"data":"<base64>","error":""}
@@ -24,6 +30,12 @@ import (
 //	fs_readdir(path_ptr, path_len) → packed(json) // {"entries":[{"name":"...","is_dir":true},...],"error":""}
 //	log_info / log_warn / log_error(msg_ptr, msg_len) → void
 //	utc_now() → uint64 (nanoseconds)
+//
+// The env_* exports read and write the HOST PROCESS environment — not a
+// per-plugin or per-session view. A plugin's env_set is visible to every
+// other plugin and to the host itself, and env_list exposes the full
+// process environment (API keys included). Restricted deployments should
+// deny env_* via the Deny hook.
 //
 // All functions that can fail return packed JSON with an "error" field.
 // Empty error string = success.
@@ -97,6 +109,60 @@ func (h *HostAPI) RegisterHostModule(ctx context.Context, rt wazero.Runtime) err
 			return writeJSON(ctx, mod, map[string]string{})
 		}).
 		Export("keyring_delete").
+
+		// ── env_get → {"value": "...", "error": ""} ──
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
+			if h.denied("env_get") {
+				return writeJSON(ctx, mod, map[string]string{"error": "export env_get disabled"})
+			}
+			return writeJSON(ctx, mod, map[string]string{"value": os.Getenv(read(mod, keyPtr, keyLen))})
+		}).
+		Export("env_get").
+
+		// ── env_set → {"error": ""} (host process environment) ──
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen, valPtr, valLen uint32) uint64 {
+			if h.denied("env_set") {
+				return writeJSON(ctx, mod, map[string]string{"error": "export env_set disabled"})
+			}
+			if err := os.Setenv(read(mod, keyPtr, keyLen), read(mod, valPtr, valLen)); err != nil {
+				return writeJSON(ctx, mod, map[string]string{"error": err.Error()})
+			}
+			return writeJSON(ctx, mod, map[string]string{})
+		}).
+		Export("env_set").
+
+		// ── env_unset → {"error": ""} ──
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
+			if h.denied("env_unset") {
+				return writeJSON(ctx, mod, map[string]string{"error": "export env_unset disabled"})
+			}
+			if err := os.Unsetenv(read(mod, keyPtr, keyLen)); err != nil {
+				return writeJSON(ctx, mod, map[string]string{"error": err.Error()})
+			}
+			return writeJSON(ctx, mod, map[string]string{})
+		}).
+		Export("env_unset").
+
+		// ── env_list → {"env": [{"key":"...","value":"..."},...], "error": ""} ──
+		// The full host process environment — secrets included — so this is
+		// gated by the same Deny hook as the other env_* exports.
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module) uint64 {
+			if h.denied("env_list") {
+				return writeJSON(ctx, mod, map[string]string{"error": "export env_list disabled"})
+			}
+			env := os.Environ()
+			entries := make([]map[string]string, 0, len(env))
+			for _, kv := range env {
+				k, v, _ := strings.Cut(kv, "=")
+				entries = append(entries, map[string]string{"key": k, "value": v})
+			}
+			return writeJSON(ctx, mod, map[string]any{"env": entries})
+		}).
+		Export("env_list").
 
 		// ── http_request → {"status": 200, "body": "...", "error": ""} ──
 		NewFunctionBuilder().

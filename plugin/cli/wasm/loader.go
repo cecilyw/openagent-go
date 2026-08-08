@@ -108,5 +108,9 @@ func callExport(ctx context.Context, mod api.Module, name string) ([]byte, error
 	if len(results) == 0 {
 		return nil, fmt.Errorf("%s: no result", name)
 	}
-	return wasmhost.ReadPacked(mod, results[0]), nil
+	data := wasmhost.ReadPacked(mod, results[0])
+	// Return the result buffer to the guest heap (no-op for older
+	// binaries without a dealloc export).
+	wasmhost.FreePacked(ctx, mod, results[0])
+	return data, nil
 }

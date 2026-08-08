@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+
+	"github.com/yusheng-g/openagent-go/plugin/wasmhost"
 )
 
 // ObserverHub dispatches lifecycle events to observer plugins.
@@ -81,5 +83,7 @@ func (h *ObserverHub) broadcastStr(ctx context.Context, name string, arg string)
 		if _, err := fn.Call(ctx, uint64(ptr), uint64(len(b))); err != nil {
 			slog.Error("cli observer error", "name", name, "error", err)
 		}
+		// The observer input buffer is dead once the export returns.
+		wasmhost.FreeBytes(ctx, m.Mod, ptr)
 	}
 }

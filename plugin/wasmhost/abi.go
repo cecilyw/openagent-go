@@ -66,6 +66,30 @@ func WriteString(ctx context.Context, mod api.Module, data []byte) uint64 {
 	return Pack(ptr, uint32(len(data)))
 }
 
+// FreeBytes returns a guest buffer — previously handed out by the guest's
+// alloc export — back to the guest heap via the guest's dealloc export.
+//
+// No-op when the guest lacks dealloc (older .wasm binaries: the buffer
+// leaks exactly as it did before, and mixed-version deployments degrade
+// gracefully) or when ptr is 0. Best-effort: a failing dealloc must never
+// surface as an error in the calling code.
+func FreeBytes(ctx context.Context, mod api.Module, ptr uint32) {
+	if ptr == 0 {
+		return
+	}
+	dealloc := mod.ExportedFunction("dealloc")
+	if dealloc == nil {
+		return
+	}
+	dealloc.Call(ctx, uint64(ptr))
+}
+
+// FreePacked is FreeBytes for a packed (ptr, len) result.
+func FreePacked(ctx context.Context, mod api.Module, packed uint64) {
+	ptr, _ := Unpack(packed)
+	FreeBytes(ctx, mod, ptr)
+}
+
 // CallWithInput calls a guest export that takes packed (ptr, len) input and
 // returns a packed (ptr, len) result — the ABI convention shared by the CLI
 // and agent plugin loaders (previously duplicated in both).
@@ -73,6 +97,11 @@ func WriteString(ctx context.Context, mod api.Module, data []byte) uint64 {
 // Empty input calls the export with no arguments. A nil return means the
 // export returned an empty result ((0, 0)); callers decide whether that is
 // an error.
+//
+// Buffer lifecycle: the input buffer is allocated through the guest's alloc
+// export and the export's result buffer is allocated by the guest itself
+// (sdk_return) — both are returned to the guest heap before this returns.
+// Results are transient by convention: the host reads them once, then frees.
 func CallWithInput(ctx context.Context, mod api.Module, fnName string, input []byte) ([]byte, error) {
 	fn := mod.ExportedFunction(fnName)
 	if fn == nil {
@@ -80,6 +109,7 @@ func CallWithInput(ctx context.Context, mod api.Module, fnName string, input []b
 	}
 
 	var results []uint64
+	var inPtr uint32
 	if len(input) == 0 {
 		var err error
 		results, err = fn.Call(ctx)
@@ -95,17 +125,23 @@ func CallWithInput(ctx context.Context, mod api.Module, fnName string, input []b
 		if err != nil || len(allocRes) == 0 {
 			return nil, fmt.Errorf("%s: alloc: %w", fnName, err)
 		}
-		ptr := uint32(allocRes[0])
-		if !mod.Memory().Write(ptr, input) {
+		inPtr = uint32(allocRes[0])
+		if !mod.Memory().Write(inPtr, input) {
+			FreeBytes(ctx, mod, inPtr)
 			return nil, fmt.Errorf("%s: write out of bounds", fnName)
 		}
-		results, err = fn.Call(ctx, uint64(ptr), uint64(len(input)))
+		results, err = fn.Call(ctx, uint64(inPtr), uint64(len(input)))
 		if err != nil {
+			FreeBytes(ctx, mod, inPtr)
 			return nil, fmt.Errorf("%s: %w", fnName, err)
 		}
 	}
 	if len(results) == 0 {
+		FreeBytes(ctx, mod, inPtr)
 		return nil, fmt.Errorf("%s: no result", fnName)
 	}
-	return ReadPacked(mod, results[0]), nil
+	data := ReadPacked(mod, results[0])
+	FreeBytes(ctx, mod, inPtr)
+	FreePacked(ctx, mod, results[0])
+	return data, nil
 }

@@ -60,6 +60,24 @@ pub struct FsReaddirResult {
     pub error: String,
 }
 
+/// A single entry returned by host::env_list.
+#[derive(Deserialize, Serialize)]
+pub struct EnvEntry {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+/// Returned by host::env_list.
+#[derive(Deserialize, Serialize, Default)]
+pub struct EnvListResult {
+    #[serde(default)]
+    pub env: alloc::vec::Vec<EnvEntry>,
+    #[serde(default)]
+    pub error: String,
+}
+
 // ── Plugin metadata ──
 
 /// Returned by a plugin's `metadata` export as JSON.

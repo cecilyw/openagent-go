@@ -58,6 +58,9 @@ func (m *module) metadataJSON(ctx context.Context) ([]byte, error) {
 	if data == nil {
 		return nil, fmt.Errorf("metadata: read out of bounds")
 	}
+	// The metadata buffer is a per-load sdk_return allocation — return it
+	// to the guest heap (no-op for older binaries without dealloc).
+	wasmhost.FreePacked(ctx, m.mod, results[0])
 	return data, nil
 }
 

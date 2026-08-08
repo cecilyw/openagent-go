@@ -97,6 +97,13 @@ macro_rules! export {
         #[no_mangle]
         pub extern "C" fn alloc(size: u32) -> u32 { $crate::sdk_alloc(size) }
 
+        // Host-side buffer lifecycle: the host calls dealloc on the input
+        // buffer it allocated and on the packed results it read. Absent in
+        // older binaries — the host detects and skips, so mixed-version
+        // deployments degrade to the old (leaky) behavior.
+        #[no_mangle]
+        pub extern "C" fn dealloc(ptr: u32) { $crate::sdk_dealloc(ptr) }
+
         #[no_mangle]
         pub extern "C" fn metadata() -> u64 {
             let meta = <$t as $crate::export::Plugin>::build_metadata();

@@ -6,6 +6,7 @@ use alloc::string::String;
 // deserializes via serde_json, and checks the error field.
 
 use crate::up;
+use crate::{sdk_dealloc};
 use crate::types::*;
 
 mod ffi {
@@ -18,6 +19,10 @@ mod ffi {
             method_p: u32, method_l: u32, url_p: u32, url_l: u32,
             headers_p: u32, headers_l: u32, body_p: u32, body_l: u32,
         ) -> u64;
+        pub fn env_get(key_p: u32, key_l: u32) -> u64;
+        pub fn env_set(key_p: u32, key_l: u32, val_p: u32, val_l: u32) -> u64;
+        pub fn env_unset(key_p: u32, key_l: u32) -> u64;
+        pub fn env_list() -> u64;
         pub fn fs_read(path_p: u32, path_l: u32) -> u64;
         pub fn fs_write(path_p: u32, path_l: u32, data_p: u32, data_l: u32) -> u64;
         pub fn fs_readdir(path_p: u32, path_l: u32) -> u64;
@@ -46,7 +51,7 @@ pub fn keyring_get(service: &str, key: &str) -> Result<String, String> {
         service.as_ptr() as u32, service.len() as u32,
         key.as_ptr() as u32, key.len() as u32,
     )};
-    let r: KeyringResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: KeyringResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(r.value) }
 }
 
@@ -56,7 +61,7 @@ pub fn keyring_set(service: &str, key: &str, val: &str) -> Result<(), String> {
         key.as_ptr() as u32, key.len() as u32,
         val.as_ptr() as u32, val.len() as u32,
     )};
-    let r: HostResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: HostResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
 }
 
@@ -65,8 +70,43 @@ pub fn keyring_delete(service: &str, key: &str) -> Result<(), String> {
         service.as_ptr() as u32, service.len() as u32,
         key.as_ptr() as u32, key.len() as u32,
     )};
-    let r: HostResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: HostResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
+}
+
+// ── Environment (host process env) ──
+
+/// Read a host process environment variable.
+pub fn env_get(key: &str) -> Result<String, String> {
+    let packed = unsafe { ffi::env_get(key.as_ptr() as u32, key.len() as u32) };
+    let r: KeyringResult = parse_host(packed);
+    if !r.error.is_empty() { Err(r.error) } else { Ok(r.value) }
+}
+
+/// Set a host process environment variable. Visible to every plugin and
+/// to the host itself — not an isolated per-plugin view.
+pub fn env_set(key: &str, val: &str) -> Result<(), String> {
+    let packed = unsafe { ffi::env_set(
+        key.as_ptr() as u32, key.len() as u32,
+        val.as_ptr() as u32, val.len() as u32,
+    )};
+    let r: HostResult = parse_host(packed);
+    if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
+}
+
+/// Remove a host process environment variable.
+pub fn env_unset(key: &str) -> Result<(), String> {
+    let packed = unsafe { ffi::env_unset(key.as_ptr() as u32, key.len() as u32) };
+    let r: HostResult = parse_host(packed);
+    if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
+}
+
+/// List the full host process environment (secrets included — the host
+/// may disable this export via its Deny hook).
+pub fn env_list() -> Result<alloc::vec::Vec<EnvEntry>, String> {
+    let packed = unsafe { ffi::env_list() };
+    let r: EnvListResult = parse_host(packed);
+    if !r.error.is_empty() { Err(r.error) } else { Ok(r.env) }
 }
 
 // ── HTTP ──
@@ -78,7 +118,7 @@ pub fn http_request(method: &str, url: &str, headers: &str, body: &[u8]) -> Resu
         headers.as_ptr() as u32, headers.len() as u32,
         if body.is_empty() { 0 } else { body.as_ptr() as u32 }, body.len() as u32,
     )};
-    let r: HttpResponse = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: HttpResponse = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok((r.status, r.body)) }
 }
 
@@ -86,7 +126,7 @@ pub fn http_request(method: &str, url: &str, headers: &str, body: &[u8]) -> Resu
 
 pub fn fs_read(path: &str) -> Result<alloc::vec::Vec<u8>, String> {
     let packed = unsafe { ffi::fs_read(path.as_ptr() as u32, path.len() as u32) };
-    let r: FsReadResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: FsReadResult = parse_host(packed);
     if !r.error.is_empty() { return Err(r.error) }
     base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &r.data)
         .map_err(|e| alloc::format!("base64 decode: {}", e))
@@ -102,7 +142,7 @@ pub fn fs_write(path: &str, data: &[u8]) -> Result<(), String> {
         path.as_ptr() as u32, path.len() as u32,
         if data.is_empty() { 0 } else { data.as_ptr() as u32 }, data.len() as u32,
     )};
-    let r: HostResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: HostResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
 }
 
@@ -112,7 +152,7 @@ pub fn fs_write_str(path: &str, content: &str) -> Result<(), String> {
 
 pub fn fs_readdir(path: &str) -> Result<alloc::vec::Vec<DirEntry>, String> {
     let packed = unsafe { ffi::fs_readdir(path.as_ptr() as u32, path.len() as u32) };
-    let r: FsReaddirResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: FsReaddirResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(r.entries) }
 }
 
@@ -140,7 +180,7 @@ macro_rules! runtime_get_fn {
     ($name:ident, $ffi:ident) => {
         pub fn $name() -> Result<String, String> {
             let packed = unsafe { ffi::$ffi() };
-            let r: KeyringResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+            let r: KeyringResult = parse_host(packed);
             if !r.error.is_empty() { Err(r.error) } else { Ok(r.value) }
         }
     };
@@ -154,33 +194,33 @@ runtime_get_fn!(runtime_provider, runtime_provider);
 
 pub fn runtime_get_metadata(key: &str) -> Result<String, String> {
     let packed = unsafe { ffi::runtime_get_metadata(key.as_ptr() as u32, key.len() as u32) };
-    let r: KeyringResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: KeyringResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(r.value) }
 }
 
 
 pub fn runtime_set_metadata(key: &str, val: &str) -> Result<(), String> {
     let packed = unsafe { ffi::runtime_set_metadata(key.as_ptr() as u32, key.len() as u32, val.as_ptr() as u32, val.len() as u32) };
-    let r: HostResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: HostResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
 }
 
 pub fn runtime_set_model_config(json: &str) -> Result<(), String> {
     let packed = unsafe { ffi::runtime_set_model_config(json.as_ptr() as u32, json.len() as u32) };
-    let r: HostResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: HostResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
 }
 
 pub fn runtime_set_system_prompts(json: &str) -> Result<(), String> {
     let packed = unsafe { ffi::runtime_set_system_prompts(json.as_ptr() as u32, json.len() as u32) };
-    let r: HostResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: HostResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
 }
 
 pub fn runtime_set_max_turns(n: u32) -> Result<(), String> {
     let s = alloc::format!("{}", n);
     let packed = unsafe { ffi::runtime_set_max_turns(s.as_ptr() as u32, s.len() as u32) };
-    let r: HostResult = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    let r: HostResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
 }
 
@@ -191,4 +231,16 @@ fn wasm_str_packed(packed: u64) -> &'static [u8] {
     let (p, l) = up(packed);
     if p == 0 && l == 0 { return &[] }
     unsafe { core::slice::from_raw_parts(p as *const u8, l as usize) }
+}
+
+/// Parse packed host JSON into an owned value, then return the
+/// host-written response buffer to the guest heap. The host allocates a
+/// fresh buffer per call (via this crate's alloc export); it is dead once
+/// the wrapper has deserialized it, so leaving it allocated would leak a
+/// block per host call — the same leak the allocator fix eliminates
+/// everywhere else.
+fn parse_host<T: serde::de::DeserializeOwned + Default>(packed: u64) -> T {
+    let r: T = serde_json::from_slice(wasm_str_packed(packed)).unwrap_or_default();
+    sdk_dealloc(up(packed).0);
+    r
 }
