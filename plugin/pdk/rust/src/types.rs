@@ -69,6 +69,46 @@ pub struct EnvEntry {
     pub value: String,
 }
 
+// ── Scheduled jobs ──
+
+/// A cron job declared by a plugin (returned by
+/// Plugin::scheduled_jobs, serialized into metadata()). The host
+/// registers it at load time and calls run_scheduled_job when the
+/// schedule matches.
+#[derive(Serialize, Default)]
+pub struct ScheduledJob {
+    /// Job id — passed back in the run_scheduled_job input.
+    #[serde(default)]
+    pub id: String,
+    /// 5-field cron expression (minute hour dom month dow).
+    #[serde(default)]
+    pub cron: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// Input passed to a plugin's run_scheduled_job when a job fires.
+#[derive(Deserialize, Default)]
+pub struct ScheduledJobInput {
+    /// The job id declared in ScheduledJob.
+    #[serde(default)]
+    pub id: String,
+    /// The fire time (RFC3339, host local timezone).
+    #[serde(default)]
+    pub scheduled_at: String,
+}
+
+/// Returned by the run_scheduled export. Structured like ToolOutput so
+/// the host can distinguish a successful run from a failure: the error
+/// string is never smuggled through as a "result".
+#[derive(Serialize, Default)]
+pub struct ScheduledJobResult {
+    #[serde(default)]
+    pub result: String,
+    #[serde(default)]
+    pub error: String,
+}
+
 /// Returned by host::env_list.
 #[derive(Deserialize, Serialize, Default)]
 pub struct EnvListResult {
@@ -98,6 +138,9 @@ pub struct PluginMeta {
     /// Observer filter: "enter", "leave", or "*". Empty = match all.
     #[serde(default, skip_serializing_if = "str::is_empty")]
     pub phase: &'static str,
+    /// Cron jobs the host should register for this plugin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schedules: alloc::vec::Vec<ScheduledJob>,
 }
 
 // ── Stage events (agent:observers plugins) ──

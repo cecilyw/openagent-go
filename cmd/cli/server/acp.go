@@ -17,6 +17,7 @@ import (
 
 	wasm "github.com/yusheng-g/openagent-go/plugin/agent/wasm"
 	"github.com/yusheng-g/openagent-go/plugin/wasmhost"
+	"github.com/yusheng-g/openagent-go/scheduler"
 
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
 	ctxpkg "github.com/yusheng-g/openagent-go/context"
@@ -93,7 +94,11 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 	// merged into deps.Observer before the AgentServer snapshots it.
 	var pluginMgr *wasm.Manager
 	pluginDir := filepath.Join(profilesDir, "plugins")
-	mgr := wasm.NewManager(pluginDir).WithHostAPI(wasmhost.NewHostAPI(keyring.NewKeyring()))
+	sch := scheduler.New()
+	go sch.Run(ctx)
+	mgr := wasm.NewManager(pluginDir).
+		WithHostAPI(wasmhost.NewHostAPI(keyring.NewKeyring())).
+		WithScheduler(sch)
 	if err := mgr.Discover(ctx); err != nil {
 		slog.Warn("plugin discover failed", "error", err)
 	} else {

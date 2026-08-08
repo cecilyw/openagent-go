@@ -256,11 +256,12 @@ unsafe fn dealloc_impl(ptr: *mut u8) {
 // std provides its own panic handler in test builds.
 //
 // A guest panic must surface to the host as a wazero call error, never
-// hang it: observer/tool calls run on the host's background context, so a
-// `loop {}` here would deadlock the observer worker (and every later
-// stage event with it) forever. We report the reason via host log_error
-// (stack buffer only — allocating during a panic risks a re-entrant
-// second panic, e.g. when the panic IS an out-of-memory), then trap.
+// hang it: observer calls run on a background context that is never
+// cancelled, so a `loop {}` here would deadlock the observer worker (and
+// every later stage event with it) forever. We report the reason via
+// host log_error (stack buffer only — allocating during a panic risks a
+// re-entrant second panic, e.g. when the panic IS an out-of-memory),
+// then trap.
 //
 // NOTE: `unreachable!()` would re-enter this handler and spin again —
 // only hint::unreachable_unchecked (the wasm `unreachable` instruction)
@@ -383,6 +384,7 @@ pub fn dispatch_command<T: export::Plugin>(ptr: u32, len: u32, name: &str) -> u6
 
 pub mod prelude {
     pub use alloc::string::String;
+    pub use alloc::vec;
     pub use alloc::vec::Vec;
     pub use alloc::format;
     pub use serde_json;

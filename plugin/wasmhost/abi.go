@@ -98,10 +98,11 @@ func FreePacked(ctx context.Context, mod api.Module, packed uint64) {
 // export returned an empty result ((0, 0)); callers decide whether that is
 // an error.
 //
-// Buffer lifecycle: the input buffer is allocated through the guest's alloc
-// export and the export's result buffer is allocated by the guest itself
-// (sdk_return) — both are returned to the guest heap before this returns.
-// Results are transient by convention: the host reads them once, then frees.
+// Buffer lifecycle: for non-empty input, the input buffer is allocated
+// through the guest's alloc export, and the export's result buffer is
+// allocated by the guest itself (sdk_return) — both are returned to the
+// guest heap before this returns. Results are transient by convention:
+// the host reads them once, then frees.
 func CallWithInput(ctx context.Context, mod api.Module, fnName string, input []byte) ([]byte, error) {
 	fn := mod.ExportedFunction(fnName)
 	if fn == nil {

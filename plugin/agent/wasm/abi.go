@@ -40,6 +40,16 @@ type PluginMeta struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"` // tools: JSON Schema
 	Stage       string          `json:"stage,omitempty"`      // observers: which stage
 	Phase       string          `json:"phase,omitempty"`      // observers: "enter" | "leave" | "*"
+	Schedules   []Schedule      `json:"schedules,omitempty"`  // cron jobs (registered at load)
+}
+
+// Schedule is one cron job declared by a plugin. The host registers it
+// with the scheduler at load time and calls the plugin's run_scheduled
+// export when it fires.
+type Schedule struct {
+	ID          string `json:"id"`
+	Cron        string `json:"cron"`
+	Description string `json:"description,omitempty"`
 }
 
 // ── Stage input/output ──

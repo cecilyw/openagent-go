@@ -23,6 +23,7 @@ import (
 	"github.com/yusheng-g/openagent-go/model/openai"
 	"github.com/yusheng-g/openagent-go/plugin/agent/wasm"
 	"github.com/yusheng-g/openagent-go/plugin/wasmhost"
+	"github.com/yusheng-g/openagent-go/scheduler"
 )
 
 type stdLogger struct{}
@@ -40,13 +41,24 @@ func main() {
 		WithContextWindow(128_000)
 
 	// Plugin manager with host API so plugins can use log_* and keyring_*.
+	// Scheduled jobs declared by plugins fire on a process-local scheduler.
 	hostAPI := &wasmhost.HostAPI{Logger: &stdLogger{}}
-	mgr := wasm.NewManager("./plugins").WithHostAPI(hostAPI)
+	sch := scheduler.New()
+	go sch.Run(context.Background())
+	mgr := wasm.NewManager("./plugins").WithHostAPI(hostAPI).WithScheduler(sch)
 	if err := mgr.Discover(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Plugin discover error: %v\n", err)
 		os.Exit(1)
 	}
 	defer mgr.Close()
+
+	// Report any scheduled jobs the plugins declared (the scheduler fires
+	// them in the background; this is just the registration view).
+	if jobs := sch.Jobs(); len(jobs) > 0 {
+		for _, j := range jobs {
+			fmt.Printf("Scheduled job %q: %s (next %s)\n", j.ID, j.Cron, j.NextRun.Format(time.RFC3339))
+		}
+	}
 
 	// Loaded tools (from .wasm plugins + built-in)
 	tools := []openagent.Tool{&calculatorTool{}}

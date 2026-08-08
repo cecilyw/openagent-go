@@ -75,6 +75,19 @@ pub trait Plugin: Sized {
         StageOutput { action: alloc::string::String::from("continue"), reason: alloc::string::String::new() }
     }
 
+    // ── Scheduled jobs (all plugin types) ──
+
+    /// Cron jobs this plugin declares. The host registers them at load
+    /// time and calls [Self::run_scheduled_job] when a schedule matches.
+    fn scheduled_jobs() -> alloc::vec::Vec<ScheduledJob> { alloc::vec::Vec::new() }
+
+    /// Called by the host when a declared job's schedule matches. Return
+    /// a short result string (logged by the host); the error string is
+    /// logged as well.
+    fn run_scheduled_job(_job: &ScheduledJobInput) -> Result<String, String> {
+        Err("run_scheduled_job not implemented".into())
+    }
+
     // ── Internal: assemble metadata JSON ──
 
     fn build_metadata() -> PluginMeta {
@@ -85,6 +98,7 @@ pub trait Plugin: Sized {
         let (stage, phase) = Self::stage_filter();
         meta.stage = stage;
         meta.phase = phase;
+        meta.schedules = Self::scheduled_jobs();
         meta
     }
 }
@@ -156,6 +170,21 @@ macro_rules! export {
         pub extern "C" fn run(ptr: u32, len: u32) -> u64 {
             let input: $crate::types::StageInput = $crate::read_input_json($crate::pk(ptr, len));
             let out = <$t as $crate::export::Plugin>::observe_stage(&input);
+            $crate::sdk_return_json(&out)
+        }
+
+        // ── scheduled jobs ──
+        // Errors travel in the structured result (ScheduledJobResult),
+        // NOT as a bare string with a guest-side log_error — otherwise the
+        // host would log the failure as a successful "result". The host
+        // logs the error string itself.
+        #[no_mangle]
+        pub extern "C" fn run_scheduled(ptr: u32, len: u32) -> u64 {
+            let input: $crate::types::ScheduledJobInput = $crate::read_input_json($crate::pk(ptr, len));
+            let out = match <$t as $crate::export::Plugin>::run_scheduled_job(&input) {
+                Ok(r) => $crate::types::ScheduledJobResult { result: r, error: alloc::string::String::new() },
+                Err(e) => $crate::types::ScheduledJobResult { result: alloc::string::String::new(), error: e },
+            };
             $crate::sdk_return_json(&out)
         }
     };

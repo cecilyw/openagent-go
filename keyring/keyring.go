@@ -167,7 +167,11 @@ func (m *MemStore) Get(service, key string) (string, error) {
 	defer m.mu.RUnlock()
 	v, ok := m.keys[m.gk(service, key)]
 	if !ok {
-		return "", nil
+		// Same contract as the persistent backends (keyctlBackend.Get,
+		// secretServiceBackend.Get): a missing key is ErrNotFound. Store.Get
+		// maps that to ("", nil) for callers that want the tolerant read;
+		// backends must not silently diverge from each other.
+		return "", gkr.ErrNotFound
 	}
 	return v, nil
 }

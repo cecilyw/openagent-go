@@ -2,14 +2,17 @@ package wasm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	openagent "github.com/yusheng-g/openagent-go"
 	"github.com/yusheng-g/openagent-go/plugin/wasmhost"
+	"github.com/yusheng-g/openagent-go/scheduler"
 )
 
 // Manager discovers and manages WASM plugins from a directory.
@@ -21,7 +24,12 @@ type Manager struct {
 	tools     []openagent.Tool
 	observers []*wasmObserver
 
-	hostAPI *wasmhost.HostAPI
+	hostAPI   *wasmhost.HostAPI
+	scheduler *scheduler.Scheduler
+
+	// scheduled tracks the job ids each plugin registered, so Close can
+	// unregister them all. Guarded by mu.
+	scheduled map[string][]string
 
 	onAbort func(reason string)
 
@@ -35,7 +43,7 @@ type Manager struct {
 
 // NewManager creates a Manager for the given plugin directory.
 func NewManager(dir string) *Manager {
-	return &Manager{dir: dir}
+	return &Manager{dir: dir, scheduled: make(map[string][]string)}
 }
 
 // WithHostAPI configures the host exports (keyring_get/set, http_request,
@@ -43,6 +51,15 @@ func NewManager(dir string) *Manager {
 // Call before [Manager.Discover].
 func (m *Manager) WithHostAPI(h *wasmhost.HostAPI) *Manager {
 	m.hostAPI = h
+	return m
+}
+
+// WithScheduler registers the cron jobs that plugins declare in their
+// metadata with this scheduler at Discover time, and unregisters them at
+// Close. nil (default) = scheduled jobs are ignored (the export is not
+// called). Call before [Manager.Discover].
+func (m *Manager) WithScheduler(s *scheduler.Scheduler) *Manager {
+	m.scheduler = s
 	return m
 }
 
@@ -128,7 +145,82 @@ func (m *Manager) loadOne(ctx context.Context, path string) error {
 		return nil
 	}
 
+	m.registerSchedules(meta, mod)
+
 	return nil
+}
+
+// registerSchedules registers the plugin's declared cron jobs with the
+// scheduler (if one is wired). Job ids are namespaced by plugin name —
+// "name/jobid" — so two plugins can never clobber each other.
+//
+// CALLER HOLDS m.mu (Discover calls this inside its lock) — this must
+// never take m.mu again: sync.Mutex is not re-entrant and a second lock
+// here deadlocks Discover for any plugin that declares schedules.
+func (m *Manager) registerSchedules(meta PluginMeta, mod *module) {
+	if m.scheduler == nil || len(meta.Schedules) == 0 {
+		return
+	}
+	// Job ids must be unique per plugin.
+	seen := make(map[string]bool, len(meta.Schedules))
+	for _, sc := range meta.Schedules {
+		if sc.ID == "" || sc.Cron == "" {
+			slog.Warn("openagent: wasm plugin declared an invalid schedule", "plugin", meta.Name, "schedule", sc)
+			continue
+		}
+		if seen[sc.ID] {
+			slog.Warn("openagent: wasm plugin declared duplicate schedule id", "plugin", meta.Name, "id", sc.ID)
+			continue
+		}
+		seen[sc.ID] = true
+		id := meta.Name + "/" + sc.ID
+		if err := m.scheduler.Register(id, sc.Cron, func(ctx context.Context, at time.Time) {
+			m.invokeScheduled(ctx, mod, sc.ID, at)
+		}); err != nil {
+			slog.Warn("openagent: wasm plugin schedule rejected", "plugin", meta.Name, "id", sc.ID, "cron", sc.Cron, "error", err)
+			continue
+		}
+		slog.Info("openagent: registered wasm scheduled job", "plugin", meta.Name, "job", sc.ID, "cron", sc.Cron)
+		// m.mu is already held by Discover — appending without re-locking.
+		m.scheduled[meta.Name] = append(m.scheduled[meta.Name], id)
+	}
+}
+
+// invokeScheduled fires one plugin job: call its run_scheduled export
+// with {"id", "scheduled_at"}. The scheduler already bounds this with
+// its own timeout context.
+func (m *Manager) invokeScheduled(ctx context.Context, mod *module, jobID string, at time.Time) {
+	payload, err := json.Marshal(map[string]any{
+		"id":           jobID,
+		"scheduled_at": at.Format(time.RFC3339),
+	})
+	if err != nil {
+		slog.Error("openagent: wasm scheduled job marshal failed", "job", jobID, "error", err)
+		return
+	}
+	out, err := mod.invoke(ctx, "run_scheduled", payload)
+	if err != nil {
+		slog.Error("openagent: wasm scheduled job failed", "job", jobID, "error", err)
+		return
+	}
+	// The result is structured (ScheduledJobResult) — the error string
+	// travels in the "error" field, so a failure is never logged as a
+	// successful result.
+	var r struct {
+		Result string `json:"result"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil {
+		slog.Error("openagent: wasm scheduled job returned unparseable result", "job", jobID, "raw", string(out), "error", err)
+		return
+	}
+	if r.Error != "" {
+		slog.Error("openagent: wasm scheduled job failed", "job", jobID, "error", r.Error)
+		return
+	}
+	if r.Result != "" {
+		slog.Info("openagent: wasm scheduled job ran", "job", jobID, "result", r.Result)
+	}
 }
 
 // Tools returns loaded Tool plugins as openagent.Tool values (a copy —
@@ -155,11 +247,20 @@ func (m *Manager) Observer() openagent.RunObserver {
 	return &observerRouter{mgr: m}
 }
 
-// Close releases the wazero runtime and detaches the observer queue (no
-// new events accepted; the worker drains and exits with the process).
+// Close releases the wazero runtime, unregisters all scheduled jobs, and
+// detaches the observer queue (no new events accepted; the worker drains
+// and exits with the process).
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.scheduler != nil {
+		for _, ids := range m.scheduled {
+			for _, id := range ids {
+				m.scheduler.Unregister(id)
+			}
+		}
+		m.scheduled = make(map[string][]string)
+	}
 	m.observeCh = nil
 	if m.ldr.runtime == nil {
 		return nil

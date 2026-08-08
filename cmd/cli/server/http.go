@@ -19,6 +19,7 @@ import (
 
 	wasm "github.com/yusheng-g/openagent-go/plugin/agent/wasm"
 	"github.com/yusheng-g/openagent-go/plugin/wasmhost"
+	"github.com/yusheng-g/openagent-go/scheduler"
 
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
 	clirest "github.com/yusheng-g/openagent-go/cmd/cli/rest"
@@ -106,8 +107,14 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 	}
 
 	// Plugin manager — loads agent:tools and agent:observers plugins.
+	// Scheduled jobs declared by plugins fire on a process-local scheduler
+	// that lives for the server's lifetime.
 	pluginDir := filepath.Join(profilesDir, "plugins")
-	mgr := wasm.NewManager(pluginDir).WithHostAPI(wasmhost.NewHostAPI(keyring.NewKeyring()))
+	sch := scheduler.New()
+	go sch.Run(ctx)
+	mgr := wasm.NewManager(pluginDir).
+		WithHostAPI(wasmhost.NewHostAPI(keyring.NewKeyring())).
+		WithScheduler(sch)
 	if err := mgr.Discover(ctx); err != nil {
 		slog.Warn("plugin discover failed", "error", err)
 	} else {
