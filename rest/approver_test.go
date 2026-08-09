@@ -49,18 +49,19 @@ func TestRestApproverAlwaysSessionScoped(t *testing.T) {
 	if _, err := a.Ask(ctx, openagent.ToolCall{ID: "c1", Function: openagent.ToolCallFunction{Name: "shell", Arguments: `{"command":"ls -la"}`}}, openagent.FunctionDefinition{}, sess("s1")); err != nil {
 		t.Fatal(err)
 	}
-	// Exact match remembered (session-scoped).
-	key := governance.ApprovalKey("shell", json.RawMessage(`{"command":"ls -la"}`))
+	// The command atom is remembered (session-scoped) — the multi-key
+	// decomposition of the shell call.
+	key := governance.ShellCmdKey("ls -la")
 	if _, ok := mem.Recall(ctx, "s1", key); !ok {
-		t.Fatal("always must write session memory under tool+args key")
+		t.Fatal("always must write session memory under the command-atom key")
 	}
 	// Another session is NOT covered (session-scoped).
 	if _, ok := mem.Recall(ctx, "s2", key); ok {
 		t.Fatal("session grant leaked to another session")
 	}
-	// A changed argument is a different key.
-	if _, ok := mem.Recall(ctx, "s1", governance.ApprovalKey("shell", json.RawMessage(`{"command":"rm -rf x"}`))); ok {
-		t.Fatal("changed args must not match")
+	// A changed command is a different key.
+	if _, ok := mem.Recall(ctx, "s1", governance.ShellCmdKey("rm -rf x")); ok {
+		t.Fatal("changed command must not match")
 	}
 	// deny / edit never write memory.
 	a2 := &restApprover{submit: scriptedSubmit("deny"), memory: mem}

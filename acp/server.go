@@ -2331,17 +2331,15 @@ func (a *acpApprover) Ask(ctx context.Context, call openagent.ToolCall, def open
 			RawInput:   json.RawMessage(call.Function.Arguments),
 		},
 		// ACP semantics: allow_once = this call only (never remembered),
-		// allow_always = remembered for the session (same tool + args no
-		// longer asks this session). Cross-session rules are a separate
-		// configuration layer, not a button grant.
-		//
-		// The "Allow Always" option is TEMPORARILY withheld from the ACP
-		// client (session-scoped grants are still offered over REST); the
-		// backend handling below stays so re-enabling is a one-line
-		// option add, and a stale client sending "allow_always" still
-		// works.
+		// allow_always = remembered for the session. For shell, the grant
+		// covers the command's atoms and file accesses (all of them must
+		// be remembered to skip approval — see governance.MemoryKeys), so
+		// a changed command or a new file target re-asks while reused
+		// ones don't. Cross-session rules are a separate configuration
+		// layer, not a button grant.
 		Options: []openacp.PermissionOption{
 			{OptionID: "allow_once", Name: "Allow Once", Kind: openacp.PermissionAllowOnce},
+			{OptionID: "allow_always", Name: "Allow Always", Kind: openacp.PermissionAllowAlways},
 			{OptionID: "reject_once", Name: "Reject", Kind: openacp.PermissionRejectOnce},
 		},
 	})
@@ -2367,9 +2365,17 @@ func (a *acpApprover) Ask(ctx context.Context, call openagent.ToolCall, def open
 		// Rule) is future work, not a button grant.
 		d := governance.Decision{Action: governance.Allow, Reason: "allow always"}
 		if a.memory != nil {
-			key := governance.ApprovalKey(call.Function.Name, json.RawMessage(call.Function.Arguments))
-			if err := a.memory.Remember(ctx, session.ID, key, d); err != nil {
-				slog.Warn("openagent: approval always persistence failed", "session", session.ID, "error", err)
+			// Multi-key tools (shell command atoms + file accesses,
+			// write target) remember every key — the policy chain later
+			// requires ALL of them to skip approval.
+			keys := governance.MemoryKeys(call.Function.Name, json.RawMessage(call.Function.Arguments))
+			if len(keys) == 0 {
+				keys = []string{governance.ApprovalKey(call.Function.Name, json.RawMessage(call.Function.Arguments))}
+			}
+			for _, key := range keys {
+				if err := a.memory.Remember(ctx, session.ID, key, d); err != nil {
+					slog.Warn("openagent: approval always persistence failed", "session", session.ID, "error", err)
+				}
 			}
 		}
 		return d, nil

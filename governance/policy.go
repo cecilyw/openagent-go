@@ -186,13 +186,32 @@ func (e *Engine) Evaluate(ctx context.Context, call openagent.ToolCall, def open
 	// a changed argument is a different operation and asks again). A
 	// remembered Ask never short-circuits — it still routes to the human
 	// layer (otherwise an Ask in memory would silently bypass approval).
+	//
+	// shell and write use multi-key ALL semantics: every command atom and
+	// every file access must be remembered as Allow (see MemoryKeys), so
+	// a new command in a chain or a new file target re-asks while reused
+	// ones don't.
 	if e.Memory != nil {
-		key := ApprovalKey(call.Function.Name, json.RawMessage(call.Function.Arguments))
-		if d, ok := e.Memory.Recall(ctx, session.ID, key); ok {
-			if d.Action == Ask {
-				return e.askHuman(ctx, call, def, session, "remembered ask")
+		if keys := MemoryKeys(call.Function.Name, json.RawMessage(call.Function.Arguments)); len(keys) > 0 {
+			all := true
+			for _, k := range keys {
+				d, ok := e.Memory.Recall(ctx, session.ID, k)
+				if !ok || d.Action != Allow {
+					all = false
+					break
+				}
 			}
-			return d, nil
+			if all {
+				return Decision{Action: Allow, Reason: "remembered"}, nil
+			}
+		} else {
+			key := ApprovalKey(call.Function.Name, json.RawMessage(call.Function.Arguments))
+			if d, ok := e.Memory.Recall(ctx, session.ID, key); ok {
+				if d.Action == Ask {
+					return e.askHuman(ctx, call, def, session, "remembered ask")
+				}
+				return d, nil
+			}
 		}
 	}
 

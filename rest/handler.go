@@ -614,9 +614,17 @@ func (a *restApprover) Ask(ctx context.Context, call openagent.ToolCall, def ope
 	case "allow_always":
 		d := governance.Decision{Action: governance.Allow, Reason: r.reason}
 		if a.memory != nil {
-			key := governance.ApprovalKey(call.Function.Name, json.RawMessage(call.Function.Arguments))
-			if err := a.memory.Remember(ctx, session.ID, key, d); err != nil {
-				slog.Warn("openagent: approval always persistence failed", "session", session.ID, "error", err)
+			// Multi-key tools (shell command atoms + file accesses,
+			// write target) remember every key — the policy chain later
+			// requires ALL of them to skip approval.
+			keys := governance.MemoryKeys(call.Function.Name, json.RawMessage(call.Function.Arguments))
+			if len(keys) == 0 {
+				keys = []string{governance.ApprovalKey(call.Function.Name, json.RawMessage(call.Function.Arguments))}
+			}
+			for _, key := range keys {
+				if err := a.memory.Remember(ctx, session.ID, key, d); err != nil {
+					slog.Warn("openagent: approval always persistence failed", "session", session.ID, "error", err)
+				}
 			}
 		}
 		return d, nil

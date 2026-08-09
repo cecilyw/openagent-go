@@ -30,6 +30,8 @@ require (
 
 require github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 
+require mvdan.cc/sh/v3 v3.13.1
+
 require (
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
