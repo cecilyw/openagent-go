@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -279,9 +280,28 @@ func toSDKToolCallParams(calls []openagent.ToolCall) []openaisdk.ChatCompletionM
 	return out
 }
 
+// toSDKTools serializes the tool set for the API, deduplicated by name
+// (the LAST definition wins — mode switches rebind plan/execution tools,
+// so later registrations carry the current intent) and stable-sorted by
+// name so the same tool set always serializes to the same order. A
+// stable tools prefix keeps the prompt-cache prefix stable across turns
+// and retries; duplicate names also break strict providers (DeepSeek
+// rejects "Tool names must be unique").
 func toSDKTools(defs []openagent.FunctionDefinition) []openaisdk.ChatCompletionToolUnionParam {
-	out := make([]openaisdk.ChatCompletionToolUnionParam, len(defs))
+	last := make(map[string]int, len(defs)) // name → index of the last definition
 	for i, d := range defs {
+		last[d.Name] = i
+	}
+	uniq := make([]openagent.FunctionDefinition, 0, len(last))
+	for i, d := range defs {
+		if last[d.Name] == i {
+			uniq = append(uniq, d)
+		}
+	}
+	sort.SliceStable(uniq, func(i, j int) bool { return uniq[i].Name < uniq[j].Name })
+
+	out := make([]openaisdk.ChatCompletionToolUnionParam, len(uniq))
+	for i, d := range uniq {
 		params := d.Parameters.SchemaMap()
 		out[i] = openaisdk.ChatCompletionToolUnionParam{
 			OfFunction: &openaisdk.ChatCompletionFunctionToolParam{
