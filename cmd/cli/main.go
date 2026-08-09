@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -50,6 +52,24 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// -q/--quiet silences log output for the whole process. cobra parses
+	// flags during Execute, but plugin loading happens before that — parse
+	// just the persistent flags early (unknown flags tolerated: subcommand
+	// locals like --port aren't in the root set yet, and this early parse
+	// must not reject them). The whitelist only affects this parse; Execute
+	// parses its own FlagSet normally. GetBool also handles explicit
+	// negation (--quiet=false) correctly.
+	fs := rootCmd.PersistentFlags()
+	fs.ParseErrorsWhitelist.UnknownFlags = true
+	fs.Parse(os.Args[1:])
+	quiet, _ := fs.GetBool("quiet")
+	if quiet {
+		// Apply BEFORE plugin loading (which happens before cobra's
+		// Execute), and again after SetupLog below (which reinstalls the
+		// default slog handler) so quiet survives both.
+		applyQuiet()
+	}
+
 	// 4. Load every .wasm and route capabilities.
 	settings := raw
 	if len(settings) == 0 {
@@ -83,6 +103,10 @@ func main() {
 	}
 	if logCleanup != nil {
 		defer logCleanup()
+	}
+	if quiet {
+		// SetupLog reinstalled the default slog handler — re-apply quiet.
+		applyQuiet()
 	}
 
 	// 6. Build cobra tree.
@@ -369,6 +393,15 @@ func isKeyringCmd(args []string) bool {
 	return false
 }
 
+// applyQuiet silences all log output (slog and the standard log package)
+// by discarding every message. Note this must NOT write to os.Stderr:
+// the ACP protocol uses stderr as a control pipe and any log output
+// there fills the pipe buffer and blocks the process.
+func applyQuiet() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	log.SetOutput(io.Discard)
+}
+
 // loadPlugins instantiates the WASM runtime, loads every .wasm under
 // pluginPaths, and routes capabilities (settings merge, command
 // registration, observer wiring). Returns the possibly merged settings
@@ -463,4 +496,9 @@ func init() {
 	rootCmd.Version = version.Version
 	rootCmd.Flags().BoolP("version", "v", false, "show version")
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
+
+	// -q/--quiet silences all log output (plugin loading logs included).
+	// Persistent so it works on every subcommand; applied manually in
+	// main() because plugin loading happens before cobra's Execute.
+	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "suppress all log output")
 }
