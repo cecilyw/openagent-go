@@ -45,8 +45,8 @@ func TestParseShellPipeline(t *testing.T) {
 
 func TestParseShellAndOrChain(t *testing.T) {
 	wantCmds(t, "cat a && ls b", "cat a", "ls b")
-	wantCmds(t, "cat a || echo failed", "cat a", "echo failed")
-	wantCmds(t, "cat a && ls b || echo x", "cat a", "ls b", "echo x")
+	wantCmds(t, "cat a || echo failed", "cat a", "echo") // echo: readonly, name-level
+	wantCmds(t, "cat a && ls b || echo x", "cat a", "ls b", "echo")
 }
 
 func TestParseShellSemicolon(t *testing.T) {
@@ -74,12 +74,14 @@ func TestParseShellFdDupIgnored(t *testing.T) {
 }
 
 func TestParseShellQuotedPipe(t *testing.T) {
-	// Pipes inside quotes are data, not operators.
-	wantCmds(t, `echo "a | b"`, `echo "a | b"`)
+	// Pipes inside quotes are data, not operators. echo is readonly —
+	// the atom is the name; the quoted content carries no commands.
+	wantCmds(t, `echo "a | b"`, `echo`)
 }
 
 func TestParseShellSubshell(t *testing.T) {
-	wantCmds(t, "echo $(cat a | wc -l)", "echo $(cat a | wc -l)", "cat a", "wc -l")
+	// echo is readonly (name-level); the $(...) commands are extracted.
+	wantCmds(t, "echo $(cat a | wc -l)", "echo", "cat a", "wc -l")
 }
 
 func TestParseShellIfClause(t *testing.T) {
@@ -293,4 +295,31 @@ func TestFileUnitVariableNeverDirectoryGrant(t *testing.T) {
 	if FileKey(true, "/tmp/build-1.log") != FileKey(true, "/tmp/build-2.log") {
 		t.Fatal("non-variable same-directory writes must still share a grant")
 	}
+}
+
+// ── Readonly commands: name-level atoms ──
+
+// echo/which/pwd are side-effect-free: approving one variant covers the
+// whole command (arguments are output content, not a different
+// operation).
+func TestParseShellReadonlyCmdNameAtom(t *testing.T) {
+	a, _ := parseShell(t, "echo hello")
+	b, _ := parseShell(t, "echo world")
+	if len(a) != 1 || a[0] != "echo" || b[0] != "echo" {
+		t.Fatalf("readonly atoms = %v / %v, want [echo] / [echo]", a, b)
+	}
+	if ShellCmdKey(a[0]) != ShellCmdKey(b[0]) {
+		t.Fatal("echo variants must share one command-level grant")
+	}
+	wantCmds(t, "which curl", "which")
+	wantCmds(t, "pwd && date", "pwd", "date")
+	// Non-readonly commands keep command+args granularity.
+	wantCmds(t, "cat a", "cat a")
+	wantCmds(t, "sudo echo x", "sudo echo x") // sudo is the command — not readonly
+}
+
+// Readonly name-level atom still composes with the file layer: the echo
+// is covered, the write to a sensitive file is not.
+func TestParseShellReadonlyAtomWithRedirection(t *testing.T) {
+	wantFiles(t, "echo x > /etc/passwd", ShellAccess{Path: "/etc/passwd", Write: true})
 }

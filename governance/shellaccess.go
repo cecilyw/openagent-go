@@ -95,7 +95,7 @@ func ParseShell(command string) (cmds []string, files []ShellAccess, err error) 
 				walk(s)
 			}
 		case *syntax.CallExpr:
-			cmds = append(cmds, sprint(pr, x))
+			cmds = append(cmds, cmdAtom(pr, x))
 			for _, w := range x.Args {
 				walkWord(w)
 			}
@@ -200,6 +200,18 @@ func sprint(pr *syntax.Printer, n syntax.Node) string {
 	return strings.TrimSpace(buf.String())
 }
 
+// cmdAtom renders a call's atom: the bare command name for readonlyCmds
+// (approving echo covers every echo variant), the full command+args
+// otherwise.
+func cmdAtom(pr *syntax.Printer, x *syntax.CallExpr) string {
+	if len(x.Args) > 0 {
+		if lit, ok := x.Args[0].Parts[0].(*syntax.Lit); ok && readonlyCmds[lit.Value] {
+			return lit.Value
+		}
+	}
+	return sprint(pr, x)
+}
+
 func collectRedirs(redirs []*syntax.Redirect, out *[]ShellAccess) {
 	for _, r := range redirs {
 		if a, ok := redirectAccess(r); ok {
@@ -231,6 +243,20 @@ func redirectAccess(r *syntax.Redirect) (ShellAccess, bool) {
 }
 
 // ── Approval keys ──
+
+// readonlyCmds are side-effect-free query/output commands whose command
+// atom is the NAME alone — approving `echo hello` covers every `echo`
+// variant (the arguments are output content, not a different operation;
+// per-argument granularity would re-ask forever on echo/which/pwd).
+// Every other command keeps command+args granularity. The boundary is
+// strict: no file-reading command (cat/head/tail/grep) belongs here —
+// their arguments are paths and stay in the atom — and file writes via
+// redirection are still gated by the file layer regardless.
+var readonlyCmds = map[string]bool{
+	"echo": true, "printf": true, "which": true, "pwd": true, "date": true,
+	"whoami": true, "uname": true, "hostname": true, "dirname": true,
+	"basename": true, "true": true, "false": true, "type": true, "sleep": true,
+}
 
 // sensitiveDirs keep single-file granularity: directory-level grants
 // inside them would approve every file (e.g. /etc/passwd → /etc/ →
