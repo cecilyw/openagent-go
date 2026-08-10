@@ -40,7 +40,7 @@ func (t *Grep) Execute(ctx context.Context, args json.RawMessage) *openagent.Too
 		return openagent.ErrorResult(fmt.Errorf("grep: %w", err), false, "")
 	}
 
-	searchDir, err := validatePath(t.workDir, params.Path)
+	searchDir, err := ValidatePath(t.workDir, params.Path)
 	if err != nil {
 		// Empty path defaults to workspace root.
 		if params.Path == "" {

@@ -43,6 +43,7 @@ type FeishuManager struct {
 	deps        kernel.Deps
 	feishuCfg   *config.FeishuConfig // settings.json channels.feishu (may be nil)
 	defaultMode string               // "manual" | "auto" (empty = "manual")
+	workDir     string               // workspace root for channel-specific tools
 	metaStore   session.Store        // session metadata store (nil = no meta tagging)
 
 	mu     sync.Mutex
@@ -60,20 +61,21 @@ type FeishuManager struct {
 }
 
 // NewFeishuManager creates the process-level feishu connection manager.
-// baseCtx is the serve process context — the connection and the QR
+// env.Ctx is the serve process context — the connection and the QR
 // registration run on it, so neither is torn down by an HTTP request
 // returning. feishuCfg is the settings.json channels.feishu block (nil
 // when the user did not configure credentials — the manager then runs
 // the QR registration flow).
-func NewFeishuManager(baseCtx context.Context, profiles string, feishuCfg *config.FeishuConfig, cfg *agent.Agent, deps kernel.Deps, defaultMode string, metaStore session.Store) *FeishuManager {
+func NewFeishuManager(env ChannelEnv, feishuCfg *config.FeishuConfig) *FeishuManager {
 	return &FeishuManager{
-		baseCtx:     baseCtx,
-		profiles:    profiles,
+		baseCtx:     env.Ctx,
+		profiles:    env.Profiles,
 		feishuCfg:   feishuCfg,
-		cfg:         cfg,
-		deps:        deps,
-		defaultMode: defaultMode,
-		metaStore:   metaStore,
+		cfg:         env.Cfg,
+		deps:        env.Deps,
+		defaultMode: env.DefaultMode,
+		workDir:     env.WorkDir,
+		metaStore:   env.MetaStore,
 		status:      clirest.FeishuStatus{Phase: clirest.FeishuIdle},
 	}
 }
@@ -280,6 +282,13 @@ func (m *FeishuManager) startConnection(lock *ChannelLock, creds FeishuCredentia
 		ch := feishu.New(creds.AppID, creds.AppSecret, m.defaultMode)
 		mem := governance.NewSessionApprovalMemory()
 		deps := m.deps
+		// Clone the tools slice so the channel-specific SendFile tool
+		// does not pollute the shared deps.Tools (other channels and
+		// the REST/ACP paths share the same deps).
+		deps.Tools = append([]openagent.Tool{}, m.deps.Tools...)
+		if m.workDir != "" {
+			deps.Tools = append(deps.Tools, feishu.NewSendFile(ch, m.workDir))
+		}
 		deps.HumanApprover = ch.Approver(mem)
 		deps.ApprovalMemory = mem
 		slog.Info("channel approver enabled", "channel", "feishu")
@@ -548,10 +557,15 @@ func feishuMessageHandler(cfg *agent.Agent, deps kernel.Deps, ch channel.Channel
 			// (RunHooks via SessionFromContext, e.g. the artifact hook's
 			// context-window threshold) read the same model the runner
 			// uses.
+			//
+			// Metadata carries the Feishu receive_id so channel-specific
+			// tools (e.g. feishu_sendfile) can send messages back to the
+			// originating chat without a separate context key.
 			session := openagent.Session{
 				ID:        sessionID,
 				Model:     cfg.Model,
 				CreatedAt: time.Now(),
+				Metadata:  feishu.ReceiveMetadata(msg),
 			}
 			rt := kernel.New(cfg, deps)
 			// In auto mode, disable human approval so tools execute

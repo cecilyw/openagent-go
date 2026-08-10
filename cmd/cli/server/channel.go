@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,18 @@ import (
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
 )
 
+// ChannelEnv carries the shared runtime environment for all channel
+// connection managers. Each manager reads only the fields it needs.
+type ChannelEnv struct {
+	Ctx         context.Context
+	Profiles    string
+	Cfg         *agent.Agent
+	Deps        kernel.Deps
+	DefaultMode string // feishu approval mode ("manual" | "auto"; empty = "manual")
+	WorkDir     string // workspace root for channel-specific tools (feishu SendFile)
+	MetaStore   session.Store // session metadata store (nil = no meta tagging)
+}
+
 // RunChannels wires the feishu, wechat, and wecom connection managers.
 // All managers are ALWAYS created with their settings credentials — the
 // frontend control panel needs the status/connect endpoints even when no
@@ -30,24 +43,22 @@ import (
 // entry points are --channel <name> (Explicit, fail-fast: the user asked
 // for the bot, so running silently without it would read as "connected"
 // while delivering nothing) and the frontend's POST /connect.
-// defaultMode is the initial session mode for channel chats ("manual"
-// or "auto"; empty = "manual").
-func RunChannels(ctx context.Context, profiles string, cfg *agent.Agent, deps kernel.Deps, channelsCfg config.ChannelsConfig, defaultMode string, metaStore session.Store) (*FeishuManager, *WechatManager, *WecomManager, error) {
-	feishuMgr := NewFeishuManager(ctx, profiles, channelsCfg.Feishu, cfg, deps, defaultMode, metaStore)
+func RunChannels(env ChannelEnv, channelsCfg config.ChannelsConfig) (*FeishuManager, *WechatManager, *WecomManager, error) {
+	feishuMgr := NewFeishuManager(env, channelsCfg.Feishu)
 	if channelsCfg.Feishu != nil && channelsCfg.Feishu.Explicit {
 		if err := feishuMgr.Connect(); err != nil {
 			return nil, nil, nil, err
 		}
 	}
 
-	wechatMgr := NewWechatManager(ctx, profiles, channelsCfg.Wechat, cfg, deps, metaStore)
+	wechatMgr := NewWechatManager(env, channelsCfg.Wechat)
 	if channelsCfg.Wechat != nil && channelsCfg.Wechat.Explicit {
 		if err := wechatMgr.Connect(); err != nil {
 			return nil, nil, nil, err
 		}
 	}
 
-	wecomMgr := NewWecomManager(ctx, profiles, channelsCfg.Wecom, cfg, deps, metaStore)
+	wecomMgr := NewWecomManager(env, channelsCfg.Wecom)
 	if channelsCfg.Wecom != nil && channelsCfg.Wecom.Explicit {
 		if err := wecomMgr.Connect(); err != nil {
 			return nil, nil, nil, err
@@ -779,6 +790,10 @@ func formatInput(name, args string) string {
 		if path != "" {
 			return "`" + path + "`"
 		}
+	case "feishu_sendfile":
+		if path := jsonStr(m, "path"); path != "" {
+			return "`" + filepath.Base(path) + "`"
+		}
 	}
 	return channel.CodeBlock(trunc(args, 200))
 }
@@ -810,6 +825,8 @@ func toolEmoji(name string) string {
 		return "🧠"
 	case "load_skill":
 		return "📦"
+	case "feishu_sendfile":
+		return "📎"
 	default:
 		return "🔧"
 	}
