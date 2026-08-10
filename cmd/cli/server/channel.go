@@ -794,6 +794,10 @@ func formatInput(name, args string) string {
 		if path := jsonStr(m, "path"); path != "" {
 			return "`" + filepath.Base(path) + "`"
 		}
+	case "wecom_sendfile":
+		if path := jsonStr(m, "path"); path != "" {
+			return "`" + filepath.Base(path) + "`"
+		}
 	}
 	return channel.CodeBlock(trunc(args, 200))
 }
@@ -826,6 +830,8 @@ func toolEmoji(name string) string {
 	case "load_skill":
 		return "📦"
 	case "feishu_sendfile":
+		return "📎"
+	case "wecom_sendfile":
 		return "📎"
 	default:
 		return "🔧"

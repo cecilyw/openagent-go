@@ -16,6 +16,7 @@ import (
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
 	"github.com/yusheng-g/openagent-go/kernel"
 	"github.com/yusheng-g/openagent-go/session"
+	opentool "github.com/yusheng-g/openagent-go/tool"
 
 	clirest "github.com/yusheng-g/openagent-go/cmd/cli/rest"
 )
@@ -39,12 +40,13 @@ import (
 var _ clirest.WecomChannel = (*WecomManager)(nil)
 
 type WecomManager struct {
-	baseCtx  context.Context
-	profiles string
-	cfg      *agent.Agent
-	deps     kernel.Deps
-	wecomCfg *config.WecomConfig // settings.json channels.wecom (may be nil)
-	metaStore session.Store     // session metadata store (nil = no meta tagging)
+	baseCtx   context.Context
+	profiles  string
+	cfg       *agent.Agent
+	deps      kernel.Deps
+	wecomCfg  *config.WecomConfig // settings.json channels.wecom (may be nil)
+	workDir   string              // workspace root for wecom_sendfile tool
+	metaStore session.Store       // session metadata store (nil = no meta tagging)
 
 	mu     sync.Mutex
 	lock   *ChannelLock
@@ -66,6 +68,7 @@ func NewWecomManager(env ChannelEnv, wecomCfg *config.WecomConfig) *WecomManager
 		wecomCfg:  wecomCfg,
 		cfg:       env.Cfg,
 		deps:      env.Deps,
+		workDir:   env.WorkDir,
 		metaStore: env.MetaStore,
 		status:    clirest.WecomStatus{Phase: clirest.WecomIdle},
 	}
@@ -218,6 +221,16 @@ func (m *WecomManager) startConnection(lock *ChannelLock, creds *wecom.BotCreds)
 	go func() {
 		defer close(connDone)
 		ch := wecom.New(creds.BotID, creds.Secret)
+
+		// Clone deps so the channel-specific SendFile tool does not
+		// pollute the shared deps (other channels and the REST/ACP
+		// paths share the same base deps).
+		deps := m.deps
+		deps.Tools = append([]openagent.Tool{}, m.deps.Tools...)
+		if m.workDir != "" {
+			deps.Tools = append(deps.Tools, wecom.NewSendFile(ch, m.workDir))
+		}
+
 		everReady := false
 		ch.SetOnReady(func() {
 			everReady = true
@@ -233,7 +246,7 @@ func (m *WecomManager) startConnection(lock *ChannelLock, creds *wecom.BotCreds)
 				m.setStatus(clirest.WecomStatus{Phase: clirest.WecomDisconnected, BotID: creds.BotID, LastError: err.Error()}, connDone)
 			}
 		})
-		err := ch.Start(connCtx, wecomMessageHandler(m.cfg, m.deps, m.metaStore))
+		err := ch.Start(connCtx, wecomMessageHandler(m.cfg, deps, m.metaStore))
 		lock.Release()
 		// Publish before the cleanup (guard semantics — see FeishuManager).
 		m.setStatus(clirest.WecomStatus{Phase: clirest.WecomDisconnected, BotID: creds.BotID, LastError: errString(err)}, connDone)
@@ -368,6 +381,7 @@ func wecomMessageHandler(cfg *agent.Agent, deps kernel.Deps, metaStore session.S
 				ID:        sessionID,
 				Model:     cfg.Model,
 				CreatedAt: time.Now(),
+				Metadata:  wecom.ReceiveMetadata(msg),
 			}
 			stream := kernel.New(cfg, deps).RunStream(msgCtx, session, openagent.UserMessage(msg.Text))
 
@@ -375,6 +389,7 @@ func wecomMessageHandler(cfg *agent.Agent, deps kernel.Deps, metaStore session.S
 			var streamID string
 			sentLen := 0
 			lastFlush := time.Now()
+			hasText := false
 
 			flush := func() {
 				text := b.String()
@@ -390,21 +405,48 @@ func wecomMessageHandler(cfg *agent.Agent, deps kernel.Deps, metaStore session.S
 				lastFlush = time.Now()
 			}
 
+			// Thinking placeholder — gives immediate feedback before the
+			// LLM produces its first token (typically 1-2s).
+			streamID, _ = reply(msgCtx, channel.ReplyMessage{Text: "🤔 思考中..."})
+			lastFlush = time.Now()
+
 			for evt := range stream {
 				switch evt.Type {
 				case openagent.StreamTextDelta:
 					b.WriteString(evt.Text)
-					// ~1 refresh/s, or sooner when a chunk accumulated.
-					if time.Since(lastFlush) >= time.Second || b.Len()-sentLen >= 200 {
+					if !hasText {
+						hasText = true
 						flush()
+					} else if time.Since(lastFlush) >= time.Second || b.Len()-sentLen >= 200 {
+						flush()
+					}
+				case openagent.StreamToolCall:
+					for _, tc := range evt.Message.ToolCalls {
+						title := opentool.ToolTitle(tc.Function.Name, tc.Function.Arguments)
+						hint := toolEmoji(tc.Function.Name) + " " + title
+						display := b.String()
+						if display == "" {
+							display = hint + "..."
+						} else {
+							display += "\n\n" + hint + "..."
+						}
+						_, _ = reply(msgCtx, channel.ReplyMessage{UpdateID: streamID, Text: display})
+						lastFlush = time.Now()
 					}
 				case openagent.StreamError:
 					if evt.Error != nil {
 						b.WriteString("\n[error: " + evt.Error.Error() + "]")
 					}
+				case openagent.StreamAborted:
+					if b.Len() == 0 {
+						b.WriteString("已取消")
+					}
 				}
 			}
 			// Terminal: flush what remains and end the stream (finish=true).
+			if b.Len() == 0 {
+				b.WriteString("✅ 已完成")
+			}
 			if streamID == "" || b.Len() > sentLen {
 				flush()
 			}
