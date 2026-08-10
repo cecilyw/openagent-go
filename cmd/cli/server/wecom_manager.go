@@ -57,17 +57,17 @@ type WecomManager struct {
 }
 
 // NewWecomManager creates the process-level wecom connection manager.
-// baseCtx is the serve process context. wecomCfg is the settings.json
+// env.Ctx is the serve process context. wecomCfg is the settings.json
 // channels.wecom block (nil when not configured — QR authorization).
-func NewWecomManager(baseCtx context.Context, profiles string, wecomCfg *config.WecomConfig, cfg *agent.Agent, deps kernel.Deps, metaStore session.Store) *WecomManager {
+func NewWecomManager(env ChannelEnv, wecomCfg *config.WecomConfig) *WecomManager {
 	return &WecomManager{
-		baseCtx:  baseCtx,
-		profiles: profiles,
-		wecomCfg: wecomCfg,
-		cfg:      cfg,
-		deps:     deps,
-		metaStore: metaStore,
-		status:   clirest.WecomStatus{Phase: clirest.WecomIdle},
+		baseCtx:   env.Ctx,
+		profiles:  env.Profiles,
+		wecomCfg:  wecomCfg,
+		cfg:       env.Cfg,
+		deps:      env.Deps,
+		metaStore: env.MetaStore,
+		status:    clirest.WecomStatus{Phase: clirest.WecomIdle},
 	}
 }
 

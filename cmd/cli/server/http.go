@@ -125,7 +125,15 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 	// flagged channel). Both managers are ALWAYS created (even when no
 	// channel is configured) so the CLI-level REST API can query status
 	// and trigger connect/registration on demand.
-	feishuMgr, wechatMgr, wecomMgr, err := RunChannels(ctx, cfg.Profiles, agentCfg, deps, cfg.Channels, cfg.DefaultMode, store)
+	feishuMgr, wechatMgr, wecomMgr, err := RunChannels(ChannelEnv{
+		Ctx:         ctx,
+		Profiles:    cfg.Profiles,
+		Cfg:         agentCfg,
+		Deps:        deps,
+		DefaultMode: cfg.DefaultMode,
+		WorkDir:     workDir,
+		MetaStore:   store,
+	}, cfg.Channels)
 	if err != nil {
 		return err
 	}

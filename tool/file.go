@@ -14,11 +14,11 @@ import (
 	openagent "github.com/yusheng-g/openagent-go"
 )
 
-// validatePath resolves p against workDir into a safe absolute path.
+// ValidatePath resolves p against workDir into a safe absolute path.
 // Accepts both relative paths (joined with workDir) and absolute paths.
 // Resolves symlinks but does NOT enforce workspace boundaries —
 // that policy belongs to the sandbox and the governance policy chain.
-func validatePath(workDir, p string) (string, error) {
+func ValidatePath(workDir, p string) (string, error) {
 	var abs string
 	var err error
 	if filepath.IsAbs(p) {
@@ -72,7 +72,7 @@ func (t *ReadFile) Execute(ctx context.Context, args json.RawMessage) *openagent
 		params.Line = 1
 	}
 
-	abs, err := validatePath(t.workDir, params.Path)
+	abs, err := ValidatePath(t.workDir, params.Path)
 	if err != nil {
 		return openagent.ErrorResult(err, false, "")
 	}
@@ -199,7 +199,7 @@ func (t *WriteFile) Execute(ctx context.Context, args json.RawMessage) *openagen
 		return openagent.ErrorResult(fmt.Errorf("write: content too large (%d bytes, max %d)", len(params.Content), maxSize), false, "")
 	}
 
-	abs, err := validatePath(t.workDir, params.Path)
+	abs, err := ValidatePath(t.workDir, params.Path)
 	if err != nil {
 		return openagent.ErrorResult(err, false, "")
 	}
@@ -245,7 +245,7 @@ func (t *ListDir) Execute(ctx context.Context, args json.RawMessage) *openagent.
 		return openagent.ErrorResult(fmt.Errorf("ls: %w", err), false, "")
 	}
 
-	dir, err := validatePath(t.workDir, params.Path)
+	dir, err := ValidatePath(t.workDir, params.Path)
 	if err != nil {
 		// Empty path defaults to workspace root.
 		if params.Path == "" {
@@ -326,7 +326,7 @@ func (t *EditFile) Execute(ctx context.Context, args json.RawMessage) *openagent
 		return openagent.ErrorResult(fmt.Errorf("edit: %w", err), false, "")
 	}
 
-	abs, err := validatePath(t.workDir, params.Path)
+	abs, err := ValidatePath(t.workDir, params.Path)
 	if err != nil {
 		return openagent.ErrorResult(err, false, "")
 	}

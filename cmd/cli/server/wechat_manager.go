@@ -65,16 +65,16 @@ type WechatManager struct {
 }
 
 // NewWechatManager creates the process-level wechat connection manager.
-// baseCtx is the serve process context. wechatCfg is the settings.json
+// env.Ctx is the serve process context. wechatCfg is the settings.json
 // channels.wechat block (nil when not configured — QR login then).
-func NewWechatManager(baseCtx context.Context, profiles string, wechatCfg *config.WechatConfig, cfg *agent.Agent, deps kernel.Deps, metaStore session.Store) *WechatManager {
+func NewWechatManager(env ChannelEnv, wechatCfg *config.WechatConfig) *WechatManager {
 	return &WechatManager{
-		baseCtx:   baseCtx,
-		profiles:  profiles,
+		baseCtx:   env.Ctx,
+		profiles:  env.Profiles,
 		wechatCfg: wechatCfg,
-		cfg:       cfg,
-		deps:      deps,
-		metaStore: metaStore,
+		cfg:       env.Cfg,
+		deps:      env.Deps,
+		metaStore: env.MetaStore,
 		status:    clirest.WechatStatus{Phase: clirest.WechatIdle},
 	}
 }

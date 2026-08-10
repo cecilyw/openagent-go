@@ -165,6 +165,10 @@ func (c *Channel) SetOnError(f func(err error)) { c.onError = f }
 // Name implements channel.Channel.
 func (c *Channel) Name() string { return "feishu" }
 
+// Client returns the underlying lark client (nil before Start).
+// Used by same-package tools (e.g. SendFile) that need the IM API.
+func (c *Channel) Client() *lark.Client { return c.client }
+
 // Start implements channel.Channel. It opens a WebSocket connection to
 // Feishu and blocks until ctx is cancelled.
 func (c *Channel) Start(ctx context.Context, handler channel.MessageHandler) error {

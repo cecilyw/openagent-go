@@ -29,9 +29,9 @@ func TestReadFileResolvesTraversal(t *testing.T) {
 	out := r.Execute(context.Background(), []byte(`{"path":"../etc/passwd"}`))
 	if out.Error != nil {
 		// May fail if /etc/passwd doesn't exist or is unreadable on this system,
-		// but should NOT be rejected by validatePath.
+		// but should NOT be rejected by ValidatePath.
 		if strings.Contains(out.Error.Message, "path outside workspace") {
-			t.Errorf("boundary enforcement should be in approver, not validatePath: %v", out.Error.Message)
+			t.Errorf("boundary enforcement should be in approver, not ValidatePath: %v", out.Error.Message)
 		} else {
 			t.Logf("✅ traversal resolved (non-workspace, approver's job to reject): %v", out.Error.Message)
 		}
@@ -44,7 +44,7 @@ func TestReadFileAbsoluteOutsideWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	r := NewReadFile(dir)
 
-	// validatePath accepts absolute paths (boundary enforcement is the Approver's job).
+	// ValidatePath accepts absolute paths (boundary enforcement is the Approver's job).
 	// The call may succeed or fail depending on whether /etc/passwd exists and is readable.
 	out := r.Execute(context.Background(), []byte(`{"path":"/etc/passwd"}`))
 	if out.Error != nil {
@@ -62,7 +62,7 @@ func TestReadFileAcceptsAbsolutePathWithinWorkspace(t *testing.T) {
 	r := NewReadFile(dir)
 	out := r.Execute(context.Background(), []byte(`{"path":"`+absPath+`"}`))
 	if out.Error != nil {
-		// Acceptable: file exists but validatePath resolved symlinks, etc.
+		// Acceptable: file exists but ValidatePath resolved symlinks, etc.
 		t.Logf("absolute path result: err=%v, out=%s", out.Error.Message, out.Content)
 	} else if !strings.Contains(out.Content, "hello") {
 		t.Errorf("expected 'hello', got: %s", out.Content)
