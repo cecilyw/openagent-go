@@ -217,11 +217,25 @@ type LogoutResponse struct {
 
 // ── Session lifecycle ──
 
+// McpServers serializes as `[]` even when empty: the protocol
+// distinguishes "no MCP servers" (an empty array) from an absent field
+// (null), and clients that construct requests without setting the field
+// must not send null.
+type McpServers []McpServer
+
+// MarshalJSON renders nil as [] instead of null.
+func (m McpServers) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]McpServer(m))
+}
+
 // NewSessionRequest creates a new session.
 type NewSessionRequest struct {
 	Meta                  map[string]any `json:"_meta,omitempty"`
 	Cwd                   string         `json:"cwd"` // absolute path
-	McpServers            []McpServer    `json:"mcpServers"`
+	McpServers            McpServers     `json:"mcpServers"`
 	AdditionalDirectories []string       `json:"additionalDirectories,omitempty"`
 }
 
@@ -238,7 +252,7 @@ type LoadSessionRequest struct {
 	Meta                  map[string]any `json:"_meta,omitempty"`
 	SessionID             SessionId      `json:"sessionId"`
 	Cwd                   string         `json:"cwd"` // absolute path
-	McpServers            []McpServer    `json:"mcpServers"`
+	McpServers            McpServers     `json:"mcpServers"`
 	AdditionalDirectories []string       `json:"additionalDirectories,omitempty"`
 }
 
@@ -254,7 +268,7 @@ type ResumeSessionRequest struct {
 	Meta                  map[string]any `json:"_meta,omitempty"`
 	SessionID             SessionId      `json:"sessionId"`
 	Cwd                   string         `json:"cwd"` // absolute path
-	McpServers            []McpServer    `json:"mcpServers"`
+	McpServers            McpServers     `json:"mcpServers"`
 	AdditionalDirectories []string       `json:"additionalDirectories,omitempty"`
 }
 
