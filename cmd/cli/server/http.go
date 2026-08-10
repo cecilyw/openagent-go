@@ -18,6 +18,7 @@ import (
 	opentool "github.com/yusheng-g/openagent-go/tool"
 
 	wasm "github.com/yusheng-g/openagent-go/plugin/agent/wasm"
+	cliwasm "github.com/yusheng-g/openagent-go/plugin/cli/wasm"
 	"github.com/yusheng-g/openagent-go/plugin/wasmhost"
 	"github.com/yusheng-g/openagent-go/scheduler"
 
@@ -143,13 +144,25 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 	// CLI-level API (channels, settings) — deployment/configuration
 	// endpoints owned by cmd/cli, not the agent-level rest package.
 	clirest.Register(mux, feishuMgr, wechatMgr, wecomMgr)
+	// cli:http plugins — declared routes served under /api/plugins/<name>/.
+	// Routes are registered at plugin load time (process-level table); the
+	// dispatcher is a no-op when no cli:http plugin is loaded.
+	mux.Handle("/api/plugins/", cliwasm.HTTPHandler())
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	srv := &http.Server{Addr: addr, Handler: withMiddleware(mux)}
+	// ReadHeaderTimeout guards the slow-header DoS (a client that never
+	// finishes sending headers holds a connection); body reads are
+	// bounded per-handler (see the cli:http dispatcher). SSE endpoints
+	// are unaffected — this only covers the request-header phase.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           withMiddleware(mux),
+		ReadHeaderTimeout: 60 * time.Second,
+	}
 
 	go func() {
 		<-ctx.Done()

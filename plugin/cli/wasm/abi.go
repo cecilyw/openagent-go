@@ -17,15 +17,32 @@ import "strings"
 //     <name> is the leaf command's name with dashes replaced by underscores.
 //     input is JSON: {"args": [...], "flags": {...}}
 //
-// Plugin may import from host: keyring_get/set/delete, http_request,
-// fs_read, fs_write, fs_readdir, log_info/warn/error, utc_now.
+// HTTP-route plugins (cli:http) declare routes in metadata and export:
+//   handle_request(input_ptr, input_len) → uint64(ptr, len)
+//     input is HttpRequest JSON, output is HttpResponse JSON — see http.go.
+//
+// Plugin may import from host: keyring_get/set/delete, exec_command,
+// http_request, fs_read, fs_write, fs_readdir, log_info/warn/error,
+// env_*, utc_now.
 
 const PluginCLIPrefix = "cli:"
 
 type CLIPluginMeta struct {
-	Type        string `json:"type"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Type        string  `json:"type"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Routes      []Route `json:"routes,omitempty"` // cli:http: declared endpoints
+}
+
+// Route is one HTTP endpoint a cli:http plugin declares. The host
+// registers it under /api/plugins/<plugin-name><path> and dispatches
+// requests to the plugin's handle_request export when the template
+// matches. `{param}` path segments capture values passed to the guest
+// in HttpRequest.Params.
+type Route struct {
+	Method      string `json:"method"` // "GET" | "POST" | "PUT" | "DELETE" | "PATCH"
+	Path        string `json:"path"`   // e.g. "/skills" or "/skills/{id}"
+	Description string `json:"description,omitempty"`
 }
 
 func (m CLIPluginMeta) Is(kind string) bool {

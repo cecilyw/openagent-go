@@ -384,6 +384,7 @@ pub fn dispatch_command<T: export::Plugin>(ptr: u32, len: u32, name: &str) -> u6
 
 pub mod prelude {
     pub use alloc::string::String;
+    pub use alloc::collections::BTreeMap;
     pub use alloc::vec;
     pub use alloc::vec::Vec;
     pub use alloc::format;

@@ -88,6 +88,21 @@ pub trait Plugin: Sized {
         Err("run_scheduled_job not implemented".into())
     }
 
+    // ── cli:http (route plugins) ──
+
+    /// HTTP endpoints this plugin exposes (cli:http). The host serves
+    /// them at /api/plugins/<plugin-name><path> and calls
+    /// [Self::handle_http_request] when a route matches — the request is
+    /// already matched, so branch on `req.params` / `req.path`, not on
+    /// routing. Default: no routes (plugin is not an HTTP plugin).
+    fn routes() -> alloc::vec::Vec<Route> { alloc::vec::Vec::new() }
+
+    /// Handle a matched HTTP request. Return the response to send; the
+    /// default is 404.
+    fn handle_http_request(_req: &HttpRequest) -> HttpResp {
+        HttpResp { status: 404, body: alloc::string::String::from("not found"), ..HttpResp::default() }
+    }
+
     // ── Internal: assemble metadata JSON ──
 
     fn build_metadata() -> PluginMeta {
@@ -99,6 +114,7 @@ pub trait Plugin: Sized {
         meta.stage = stage;
         meta.phase = phase;
         meta.schedules = Self::scheduled_jobs();
+        meta.routes = Self::routes();
         meta
     }
 }
@@ -170,6 +186,16 @@ macro_rules! export {
         pub extern "C" fn run(ptr: u32, len: u32) -> u64 {
             let input: $crate::types::StageInput = $crate::read_input_json($crate::pk(ptr, len));
             let out = <$t as $crate::export::Plugin>::observe_stage(&input);
+            $crate::sdk_return_json(&out)
+        }
+
+        // ── cli:http — handle_request is always exported; the host
+        // dispatches a matched route's request to it. A plugin without
+        // routes simply never receives a call. ──
+        #[no_mangle]
+        pub extern "C" fn handle_request(ptr: u32, len: u32) -> u64 {
+            let input: $crate::types::HttpRequest = $crate::read_input_json($crate::pk(ptr, len));
+            let out = <$t as $crate::export::Plugin>::handle_http_request(&input);
             $crate::sdk_return_json(&out)
         }
 

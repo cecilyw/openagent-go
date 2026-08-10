@@ -133,6 +133,60 @@ pub struct ExecResult {
     pub error: String,
 }
 
+// ── cli:http routes ──
+
+/// One HTTP endpoint a cli:http plugin declares. The host serves it at
+/// /api/plugins/<plugin-name><path>; `{param}` segments capture path
+/// values passed in HttpRequest.params.
+#[derive(Serialize, Default)]
+pub struct Route {
+    /// "GET" | "POST" | "PUT" | "DELETE" | "PATCH".
+    #[serde(default)]
+    pub method: String,
+    /// e.g. "/skills" or "/skills/{id}".
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// Request passed to a cli:http plugin's handle_request when a declared
+/// route matches. `path` is host-stripped and matches a declared route;
+/// `params` carries the `{param}` segment values; `query` is the raw
+/// query string and `query_params` its parsed map (first value per
+/// key); `headers` is the full request header set (first value per key,
+/// lowercase keys); `body` is the raw request body.
+#[derive(Deserialize, Default)]
+pub struct HttpRequest {
+    #[serde(default)]
+    pub method: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub params: alloc::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub query_params: alloc::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub headers: alloc::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub body: String,
+}
+
+/// Response a cli:http plugin returns. status 0 renders as 200; headers
+/// are optional. (Named HttpResp — HttpResponse is the host::http_request
+/// outbound response.)
+#[derive(Serialize, Default)]
+pub struct HttpResp {
+    #[serde(default)]
+    pub status: u16,
+    #[serde(default)]
+    pub headers: alloc::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub body: String,
+}
+
 // ── Plugin metadata ──
 
 /// Returned by a plugin's `metadata` export as JSON.
@@ -156,6 +210,9 @@ pub struct PluginMeta {
     /// Cron jobs the host should register for this plugin.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schedules: alloc::vec::Vec<ScheduledJob>,
+    /// HTTP routes this plugin exposes (cli:http).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: alloc::vec::Vec<Route>,
 }
 
 // ── Stage events (agent:observers plugins) ──

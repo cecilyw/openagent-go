@@ -27,7 +27,10 @@ func NewRuntime(ctx context.Context) (*Runtime, error) {
 	// the cap only fences off a runaway third-party memory.grow.
 	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithMemoryLimitPages(8192))
 
-	h := wasmhost.NewHostAPI(keyring.NewKeyring())
+	// Unrestricted host filesystem for fs_* — the cli:http trust model
+	// (whoever can drop a .wasm here has the process's capabilities).
+	// Substitute via HostAPI.WithFS for a sandboxed deployment.
+	h := wasmhost.NewHostAPI(keyring.NewKeyring()).WithFS(wasmhost.NewOSFS())
 	if err := h.RegisterHostModule(ctx, rt); err != nil {
 		rt.Close(ctx)
 		return nil, fmt.Errorf("register host module: %w", err)

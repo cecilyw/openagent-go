@@ -456,6 +456,14 @@ func loadPlugins(ctx context.Context, pluginPaths []string, settings []byte, hub
 				registerCommands(rootCmd, cmds)
 			}
 
+			if meta.Is("http") {
+				if err := cliwasm.RegisterHTTPRoutes(mod, meta); err != nil {
+					log.Printf("plugin %s http: %v", meta.Name, err)
+					continue
+				}
+				log.Printf("plugin: registered %d http route(s) for %s", len(meta.Routes), meta.Name)
+			}
+
 			if meta.Is("observers") {
 				hub.Add(mod)
 			}
