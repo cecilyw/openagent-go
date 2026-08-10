@@ -1,6 +1,6 @@
 # BUGS.md — Known Issues & Technical Debt
 
-> Last updated 2026-08-07 (B20 prompt 超窗口上限: overhead 漏算 + 压缩仅 turn 0).
+> Last updated 2026-08-10 (B20 prompt 超窗口上限 — 已修复).
 > Format: `[P0]` = critical, `[P1]` = high, `[P2]` = medium, `[P3]` = low.
 
 ---
@@ -40,13 +40,24 @@
 
 修复：默认分支 `continue`（append 已知类型）。
 
-### B20. 压缩触发后 prompt 仍超上下文窗口
+### B20. ~~压缩触发后 prompt 仍超上下文窗口~~ ✅ 已修复（2026-08-10）
 
-现象：ACP 多轮对话报 `prompt exceeds model context window: 131793 > 131072`（压缩已在 70% 触发，仍超 100%）。
+现象：多轮对话报 `prompt exceeds model context window: 370053 > 131072`，第二次 `730119 > 131072`（≈2×，跨 session 全量读回翻倍）。
 
-根因：`estimatePromptOverhead`（`kernel/prompt.go:190-217`）漏算 buildPrompt 注入的 skills catalog / memories / resources / dynamic-template → budget 偏大、裁剪不足；压缩只在 turn 0（`kernel/run.go:100-102`），后续 tool 轮无补偿；叠加 tokenizer CJK 误差（cl100k 高估 ~60%）。
+两个独立根因，任一可单独触发超窗：
 
-修复：(a) `estimatePromptOverhead` 计入漏算组件；(b) turn>0 也检查压缩；(c) 或调低 budget 比例（70%→60%）。
+- **根因 A（主）**：`Compressor.Compact` 失败时（summarizer 模型 429/超时/网络），`prepareMemory` 原设计 fail-loud——`overflow = len(msgs)` 全量返回所有 post-summary 消息。summarizer 持续失败时每次都全量返回，跨 session 新 run 读回旧历史 + 自身新增 ≈ 2× 增长，精确解释 370053→730119 翻倍。修复：Compact 失败时降级裁剪到 budget（保留最新消息，丢最旧的；消息在 store 里不删，未来 summarizer 恢复仍可压缩）。
+- **根因 B（次）**：`prepareMemory` 只在 turn 0 调用（`kernel/run.go:100`）。turn>0 的 `workingMessages` 纯 append 无压缩无裁剪，多轮小工具结果累积无界增长。修复：turn>0 且有 SessionStore 时也调 `prepareMemory`（从 store fetch + 压缩 + 裁剪）。对齐（from/ThroughIndex/globalCutoff）由 prepareMemory 内部从 store 读保证，不索引 workingMessages（回避 prefix 不 commit / TrimOrphanToolCalls 削头 / input 重复三条对齐破坏路径）。
+
+**不是根因（已排除）**：
+
+- summary 无限膨胀：`prompt.go:74-77` 将 summary 截到 `MaxCompressedTokens`（默认 8192）后才进 prompt，有界。8192 解释不了 370053 量级。
+- tokenizer CJK 误差：cl100k 对 CJK 高估 ~60%，高估方向是提前触发压缩/提前报超窗（缓解），不加剧。60% 量级解释不了 370K 的数字。
+- `estimatePromptOverhead` 漏算 skills 目录（见下"残留"）。
+
+**残留（未修，有界）**：
+
+`estimatePromptOverhead`（`kernel/prompt.go:190-217`）只扣 static + DynamicContext + summary，不扣 skills 目录 + recalled memories + resources + 动态 preamble 模板。227 个真实 skill 的 frontmatter ≈ 18K tokens 不从 budget 扣，使 working set budget 偏大 ~18K，降低超窗阈值。不产生 370053 量级（skills 有界），但让"离超窗有多近"少 18K 裕度。未修原因：`estimatePromptOverhead` 在 `prepareMemory` 内部调（`prepare.go:88`），早于 `context.Build`（`run.go:121`，产生 ac.Skills），此时 skills 尚未发现。需处理时序问题，作为独立后续优化。
 
 ---
 

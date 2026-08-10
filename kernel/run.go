@@ -128,6 +128,31 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 			}
 		}
 
+		// ① Tool-turn re-compaction (turn > 0): prepareMemory only ran on
+		// turn 0, so the working set has grown by raw append since. Re-run
+		// prepareMemory to fetch the full post-summary history from the
+		// store, compact overflow, and trim back to budget. This is the
+		// same path turn 0 takes — alignment (from/ThroughIndex/globalCutoff)
+		// is handled internally by prepareMemory reading from the store, NOT
+		// by indexing into workingMessages (which contains un-committed prefix
+		// and orphan-trimmed heads that would misalign a manual globalCutoff).
+		// Without this, accumulated tool results / cross-session history grows
+		// unbounded and the prompt exceeds the context window.
+		if turn > 0 && rt.deps.SessionStore != nil {
+			messages, ci, err := rt.prepareMemory(ctx, session)
+			if err != nil {
+				slog.Error("openagent: tool-turn memory prepare failed", "error", err)
+				// Best-effort: keep the existing working set. The hard
+				// window check below surfaces any overflow (fail-loud).
+			} else {
+				workingMessages = messages
+				rt.compressed = ci.compressed
+				if ci.err != nil {
+					slog.Error("openagent: tool-turn compaction failed", "error", ci.err)
+				}
+			}
+		}
+
 		// Keep the AgentContext in sync with the growing working set.
 		ac.Messages = workingMessages
 
