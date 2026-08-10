@@ -47,6 +47,10 @@ func ToolTitle(name string, args string) string {
 		if params.Path != "" {
 			return name + " " + filepath.Base(params.Path)
 		}
+	case "wecom_sendfile":
+		if params.Path != "" {
+			return name + " " + filepath.Base(params.Path)
+		}
 	case "shell":
 		if params.Description != "" {
 			return name + " " + TruncateToolArg(params.Description, 60)

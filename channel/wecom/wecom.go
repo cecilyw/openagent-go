@@ -2,7 +2,9 @@ package wecom
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -39,12 +41,15 @@ type Channel struct {
 	onReady        func()
 	onReconnecting func()
 	onError        func(err error)
+
+	pending   map[string]chan Frame // req_id → response (upload acks)
+	pendingMu sync.Mutex
 }
 
 // New returns a WeCom Channel bound to the robot credentials. Must be
 // started via Start().
 func New(botID, secret string) *Channel {
-	return &Channel{botID: botID, secret: secret}
+	return &Channel{botID: botID, secret: secret, pending: make(map[string]chan Frame)}
 }
 
 // SetOnReady registers the ready callback (nil clears it). Fired once
@@ -162,6 +167,20 @@ func (c *Channel) runOnce(ctx context.Context, handler channel.MessageHandler, e
 		if err != nil {
 			return fmt.Errorf("wecom read: %w", err)
 		}
+		// Check if this is a response to a pending request (upload acks).
+		// Response frames carry the same req_id as the request and may
+		// have no "cmd" field — match by req_id before dispatching.
+		var peek Frame
+		if json.Unmarshal(raw, &peek) == nil {
+			c.pendingMu.Lock()
+			if ch, ok := c.pending[peek.Headers.ReqID]; ok {
+				delete(c.pending, peek.Headers.ReqID)
+				c.pendingMu.Unlock()
+				ch <- peek
+				continue
+			}
+			c.pendingMu.Unlock()
+		}
 		if err := c.handleFrame(raw, handler); err != nil {
 			return err
 		}
@@ -223,6 +242,10 @@ func (c *Channel) handleFrame(raw []byte, handler channel.MessageHandler) error 
 		return c.writeJSON(Frame{Cmd: cmdPong, Headers: FrameHeaders{ReqID: f.Headers.ReqID}})
 
 	default:
+		if f.Cmd == "" {
+			slog.Debug("wecom: ack response", "req_id", f.Headers.ReqID, "errcode", f.ErrCode, "errmsg", f.ErrMsg)
+			return nil
+		}
 		slog.Debug("wecom: unhandled frame", "cmd", f.Cmd)
 		return nil
 	}
@@ -311,6 +334,152 @@ func (c *Channel) buildReply(reqID string, cb *MsgCallbackBody) channel.ReplyFun
 		}
 		return streamID, nil
 	}
+}
+
+// ── Media upload + send ──
+
+const (
+	uploadChunkSize      = 512 * 1024     // 512KB before base64
+	uploadMaxChunks      = 100            // ~50MB limit
+	uploadRetryMax       = 2              // per-chunk retry count
+	uploadRetryBaseDelay = 500 * time.Millisecond
+	uploadTimeout        = 30 * time.Second
+)
+
+// sendAndWait writes a frame and blocks until the matching response
+// (same req_id) arrives from the read loop. Used by the three-step
+// upload protocol where each step's ack carries data (upload_id,
+// media_id) that the caller needs.
+func (c *Channel) sendAndWait(frame Frame) (Frame, error) {
+	reqID := frame.Headers.ReqID
+	ch := make(chan Frame, 1)
+	c.pendingMu.Lock()
+	c.pending[reqID] = ch
+	c.pendingMu.Unlock()
+	defer func() {
+		c.pendingMu.Lock()
+		delete(c.pending, reqID)
+		c.pendingMu.Unlock()
+	}()
+	if err := c.writeJSON(frame); err != nil {
+		return Frame{}, err
+	}
+	select {
+	case resp := <-ch:
+		if resp.ErrCode != 0 {
+			return resp, fmt.Errorf("wecom: errcode=%d errmsg=%s", resp.ErrCode, resp.ErrMsg)
+		}
+		return resp, nil
+	case <-time.After(uploadTimeout):
+		return Frame{}, fmt.Errorf("wecom: request timeout (req_id=%s)", reqID)
+	}
+}
+
+// UploadMedia performs the three-step chunked upload (init → chunks →
+// finish) over the WebSocket long connection and returns the media_id.
+// The media_id is valid for 3 days.
+func (c *Channel) UploadMedia(data []byte, mediaType, filename string) (string, error) {
+	totalChunks := (len(data) + uploadChunkSize - 1) / uploadChunkSize
+	if totalChunks == 0 {
+		totalChunks = 1
+	}
+	if totalChunks > uploadMaxChunks {
+		return "", fmt.Errorf("wecom: file too large (%d chunks, max %d)", totalChunks, uploadMaxChunks)
+	}
+	md5sum := md5.Sum(data)
+
+	// Step 1: init.
+	initReqID := newReqID()
+	initFrame := Frame{Cmd: cmdUploadMediaInit, Headers: FrameHeaders{ReqID: initReqID},
+		Body: mustJSON(UploadMediaInitBody{
+			Type:        mediaType,
+			Filename:    filename,
+			TotalSize:   len(data),
+			TotalChunks: totalChunks,
+			MD5:         fmt.Sprintf("%x", md5sum),
+		})}
+	initResp, err := c.sendAndWait(initFrame)
+	if err != nil {
+		return "", fmt.Errorf("wecom upload init: %w", err)
+	}
+	var initResult UploadMediaInitResult
+	if err := json.Unmarshal(initResp.Body, &initResult); err != nil {
+		return "", fmt.Errorf("wecom upload init decode: %w", err)
+	}
+	if initResult.UploadID == "" {
+		return "", fmt.Errorf("wecom upload init: no upload_id returned")
+	}
+	uploadID := initResult.UploadID
+
+	// Step 2: chunks (serial with retry).
+	for i := 0; i < totalChunks; i++ {
+		start := i * uploadChunkSize
+		end := start + uploadChunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		b64 := base64.StdEncoding.EncodeToString(data[start:end])
+		var lastErr error
+		for attempt := 0; attempt <= uploadRetryMax; attempt++ {
+			chunkReqID := newReqID()
+			chunkFrame := Frame{Cmd: cmdUploadMediaChunk, Headers: FrameHeaders{ReqID: chunkReqID},
+				Body: mustJSON(UploadMediaChunkBody{
+					UploadID:   uploadID,
+					ChunkIndex: i,
+					Base64Data: b64,
+				})}
+			if _, err := c.sendAndWait(chunkFrame); err != nil {
+				lastErr = err
+				if attempt < uploadRetryMax {
+					time.Sleep(time.Duration(attempt+1) * uploadRetryBaseDelay)
+					continue
+				}
+			} else {
+				lastErr = nil
+				break
+			}
+		}
+		if lastErr != nil {
+			return "", fmt.Errorf("wecom upload chunk %d: %w", i, lastErr)
+		}
+	}
+
+	// Step 3: finish.
+	finishReqID := newReqID()
+	finishFrame := Frame{Cmd: cmdUploadMediaFinish, Headers: FrameHeaders{ReqID: finishReqID},
+		Body: mustJSON(UploadMediaFinishBody{UploadID: uploadID})}
+	finishResp, err := c.sendAndWait(finishFrame)
+	if err != nil {
+		return "", fmt.Errorf("wecom upload finish: %w", err)
+	}
+	var finishResult UploadMediaFinishResult
+	if err := json.Unmarshal(finishResp.Body, &finishResult); err != nil {
+		return "", fmt.Errorf("wecom upload finish decode: %w", err)
+	}
+	if finishResult.MediaID == "" {
+		return "", fmt.Errorf("wecom upload finish: no media_id returned")
+	}
+	return finishResult.MediaID, nil
+}
+
+// SendMediaMessage proactively sends a media message via aibot_send_msg.
+// chatID is the user ID (single chat) or chat ID (group).
+func (c *Channel) SendMediaMessage(chatID, mediaType, mediaID string) error {
+	body := SendMediaMsgBody{ChatID: chatID, MsgType: mediaType}
+	switch mediaType {
+	case "file":
+		body.File = &MediaContent{MediaID: mediaID}
+	case "image":
+		body.Image = &MediaContent{MediaID: mediaID}
+	case "voice":
+		body.Voice = &MediaContent{MediaID: mediaID}
+	case "video":
+		body.Video = &VideoContent{MediaID: mediaID}
+	default:
+		return fmt.Errorf("wecom: unknown media type %q", mediaType)
+	}
+	return c.writeJSON(Frame{Cmd: cmdSendMsg, Headers: FrameHeaders{ReqID: newReqID()},
+		Body: mustJSON(body)})
 }
 
 // ── Internal ──

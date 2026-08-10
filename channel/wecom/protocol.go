@@ -7,22 +7,28 @@ const wsEndpoint = "wss://openws.work.weixin.qq.com"
 
 // Wire commands.
 const (
-	cmdSubscribe          = "aibot_subscribe"
-	cmdMsgCallback        = "aibot_msg_callback"
-	cmdEventCallback      = "aibot_event_callback"
-	cmdRespondMsg         = "aibot_respond_msg"
-	cmdRespondWelcomeMsg  = "aibot_respond_welcome_msg"
-	cmdRespondUpdateMsg   = "aibot_respond_update_msg"
-	cmdSendMsg            = "aibot_send_msg"
-	cmdPing               = "ping"
-	cmdPong               = "pong"
+	cmdSubscribe         = "aibot_subscribe"
+	cmdMsgCallback       = "aibot_msg_callback"
+	cmdEventCallback     = "aibot_event_callback"
+	cmdRespondMsg        = "aibot_respond_msg"
+	cmdRespondWelcomeMsg = "aibot_respond_welcome_msg"
+	cmdRespondUpdateMsg  = "aibot_respond_update_msg"
+	cmdSendMsg           = "aibot_send_msg"
+	cmdUploadMediaInit   = "aibot_upload_media_init"
+	cmdUploadMediaChunk  = "aibot_upload_media_chunk"
+	cmdUploadMediaFinish = "aibot_upload_media_finish"
+	cmdPing              = "ping"
+	cmdPong              = "pong"
 )
 
-// Frame is the envelope for every WS message (requests and callbacks).
+// Frame is the envelope for every WS message (requests, callbacks, and
+// responses). Response frames (acks) carry ErrCode/ErrMsg instead of Cmd.
 type Frame struct {
-	Cmd     string          `json:"cmd"`
+	Cmd     string          `json:"cmd,omitempty"`
 	Headers FrameHeaders    `json:"headers"`
 	Body    json.RawMessage `json:"body,omitempty"`
+	ErrCode int             `json:"errcode,omitempty"`
+	ErrMsg  string          `json:"errmsg,omitempty"`
 }
 
 // FrameHeaders carries the request id used to correlate callbacks and
@@ -99,4 +105,63 @@ type Ack struct {
 	Headers FrameHeaders `json:"headers"`
 	ErrCode int          `json:"errcode"`
 	ErrMsg  string       `json:"errmsg"`
+}
+
+// ── Media upload (three-step chunked upload via WS) ──
+
+// UploadMediaInitBody is the aibot_upload_media_init request payload.
+type UploadMediaInitBody struct {
+	Type        string `json:"type"`           // "file" | "image" | "voice" | "video"
+	Filename    string `json:"filename"`       // display name with extension
+	TotalSize   int    `json:"total_size"`     // file size in bytes
+	TotalChunks int    `json:"total_chunks"`   // number of chunks
+	MD5         string `json:"md5,omitempty"`  // file MD5 hex digest
+}
+
+// UploadMediaInitResult is the init response body.
+type UploadMediaInitResult struct {
+	UploadID string `json:"upload_id"`
+}
+
+// UploadMediaChunkBody is the aibot_upload_media_chunk request payload.
+type UploadMediaChunkBody struct {
+	UploadID   string `json:"upload_id"`
+	ChunkIndex int    `json:"chunk_index"` // 0-based
+	Base64Data string `json:"base64_data"`
+}
+
+// UploadMediaFinishBody is the aibot_upload_media_finish request payload.
+type UploadMediaFinishBody struct {
+	UploadID string `json:"upload_id"`
+}
+
+// UploadMediaFinishResult is the finish response body.
+type UploadMediaFinishResult struct {
+	Type      string `json:"type"`
+	MediaID   string `json:"media_id"`
+	CreatedAt int64  `json:"created_at"` // Unix timestamp
+}
+
+// ── Media message bodies ──
+
+// MediaContent carries a media_id reference.
+type MediaContent struct {
+	MediaID string `json:"media_id"`
+}
+
+// VideoContent carries a media_id plus optional title/description.
+type VideoContent struct {
+	MediaID     string `json:"media_id"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// SendMediaMsgBody is the aibot_send_msg payload for a media message.
+type SendMediaMsgBody struct {
+	ChatID  string        `json:"chatid"`
+	MsgType string        `json:"msgtype"`
+	File    *MediaContent `json:"file,omitempty"`
+	Image   *MediaContent `json:"image,omitempty"`
+	Voice   *MediaContent `json:"voice,omitempty"`
+	Video   *VideoContent `json:"video,omitempty"`
 }
