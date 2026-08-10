@@ -118,6 +118,21 @@ pub struct EnvListResult {
     pub error: String,
 }
 
+/// Returned by host::exec_command. exit_code is a business result —
+/// non-zero is NOT an error; the error string is set only when the
+/// command could not run, timed out, or exceeded the output cap.
+#[derive(Deserialize, Default)]
+pub struct ExecResult {
+    #[serde(default)]
+    pub stdout: String,
+    #[serde(default)]
+    pub stderr: String,
+    #[serde(default)]
+    pub exit_code: i32,
+    #[serde(default)]
+    pub error: String,
+}
+
 // ── Plugin metadata ──
 
 /// Returned by a plugin's `metadata` export as JSON.

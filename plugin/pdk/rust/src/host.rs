@@ -15,6 +15,7 @@ mod ffi {
         pub fn keyring_get(svc_p: u32, svc_l: u32, key_p: u32, key_l: u32) -> u64;
         pub fn keyring_set(svc_p: u32, svc_l: u32, key_p: u32, key_l: u32, val_p: u32, val_l: u32) -> u64;
         pub fn keyring_delete(svc_p: u32, svc_l: u32, key_p: u32, key_l: u32) -> u64;
+        pub fn exec_command(json_p: u32, json_l: u32) -> u64;
         pub fn http_request(
             method_p: u32, method_l: u32, url_p: u32, url_l: u32,
             headers_p: u32, headers_l: u32, body_p: u32, body_l: u32,
@@ -72,6 +73,40 @@ pub fn keyring_delete(service: &str, key: &str) -> Result<(), String> {
     )};
     let r: HostResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
+}
+
+// ── Exec ──
+
+/// Run a command as a child process. The platform is opaque to the
+/// guest: `cmd` is a program name (host PATH lookup) or an explicit
+/// path, and `args` is argv after the program — no shell syntax.
+///
+/// `env` overlays variables on the host process environment (inherited
+/// unless overridden). `timeout_ms` defaults to 120_000 and is clamped
+/// by the host to 10 minutes. `cwd` defaults to the host process cwd.
+///
+/// A non-zero `exit_code` is a business result, NOT an error — the
+/// error string is set only when the command could not run at all,
+/// timed out, or exceeded the host's output cap.
+pub fn exec_command(
+    cmd: &str,
+    args: &[&str],
+    cwd: Option<&str>,
+    env: Option<&alloc::collections::BTreeMap<String, String>>,
+    timeout_ms: Option<u64>,
+) -> Result<ExecResult, String> {
+    let payload = serde_json::json!({
+        "cmd": cmd,
+        "args": args,
+        "cwd": cwd,
+        "env": env,
+        "timeout_ms": timeout_ms,
+    });
+    let s = serde_json::to_string(&payload)
+        .map_err(|e| alloc::format!("exec: serialize: {}", e))?;
+    let packed = unsafe { ffi::exec_command(s.as_ptr() as u32, s.len() as u32) };
+    let r: ExecResult = parse_host(packed);
+    if !r.error.is_empty() { Err(r.error) } else { Ok(r) }
 }
 
 // ── Environment (host process env) ──

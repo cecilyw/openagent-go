@@ -19,6 +19,7 @@ import (
 //	keyring_get(service_ptr, service_len, key_ptr, key_len) → packed(json)
 //	keyring_set(service_ptr, service_len, key_ptr, key_len, val_ptr, val_len) → packed(json)
 //	keyring_delete(service_ptr, service_len, key_ptr, key_len) → packed(json)
+//	exec_command(json_ptr, json_len) → packed(json) // {"stdout","stderr","exit_code","error"}
 //	env_get(key_ptr, key_len) → packed(json)   // {"value":"...","error":""}
 //	env_set(key_ptr, key_len, val_ptr, val_len) → packed(json)
 //	env_unset(key_ptr, key_len) → packed(json)
@@ -109,6 +110,67 @@ func (h *HostAPI) RegisterHostModule(ctx context.Context, rt wazero.Runtime) err
 			return writeJSON(ctx, mod, map[string]string{})
 		}).
 		Export("keyring_delete").
+
+		// ── exec_command → {"stdout":"...","stderr":"...","exit_code":0,"error":""} ──
+		// Input JSON: {"cmd":"ls","args":["-la"],"cwd":"/tmp","env":{...},"timeout_ms":120000}
+		// cmd is required; args/cwd/env/timeout_ms are optional. env merges
+		// over the host process environment (inherited unless overridden).
+		// timeout_ms defaults to 120s and is clamped to 10min. The command
+		// runs as a child process — platform is opaque to the guest (the
+		// host resolves the program via PATH). exit_code != 0 is a business
+		// result, not an error; "error" is set only when the command could
+		// not run, timed out, or exceeded the output cap.
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module, jsonPtr, jsonLen uint32) uint64 {
+			if h.denied("exec_command") {
+				return writeJSON(ctx, mod, map[string]string{"error": "export exec_command disabled"})
+			}
+			if h.Executor == nil {
+				return writeJSON(ctx, mod, map[string]string{"error": "exec not available"})
+			}
+			raw := read(mod, jsonPtr, jsonLen)
+			var req struct {
+				Cmd       string            `json:"cmd"`
+				Args      []string          `json:"args"`
+				Cwd       string            `json:"cwd"`
+				Env       map[string]string `json:"env"`
+				TimeoutMS int               `json:"timeout_ms"`
+			}
+			if err := json.Unmarshal([]byte(raw), &req); err != nil {
+				return writeJSON(ctx, mod, map[string]string{"error": fmt.Sprintf("invalid exec request: %v", err)})
+			}
+			if req.Cmd == "" {
+				return writeJSON(ctx, mod, map[string]string{"error": "cmd is required"})
+			}
+			res := h.Executor.Exec(ctx, ExecRequest{
+				Cmd:       req.Cmd,
+				Args:      req.Args,
+				Cwd:       req.Cwd,
+				Env:       req.Env,
+				TimeoutMS: req.TimeoutMS,
+			})
+			// The guest heap bounds every host response (the guest must
+			// allocate the full JSON to deserialize it). An output near
+			// the heap size would make the guest panic on alloc failure
+			// — reject with a specific error instead.
+			if len(res.Stdout)+len(res.Stderr) > maxExecGuestResponse {
+				return writeJSON(ctx, mod, map[string]string{
+					"stdout": "", "stderr": "", "exit_code": "0",
+					"error": fmt.Sprintf("exec: output too large for guest (%d bytes)", len(res.Stdout)+len(res.Stderr)),
+				})
+			}
+			result := struct {
+				Stdout   string `json:"stdout"`
+				Stderr   string `json:"stderr"`
+				ExitCode int    `json:"exit_code"`
+				Error    string `json:"error,omitempty"`
+			}{Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode}
+			if res.Err != nil {
+				result.Error = res.Err.Error()
+			}
+			return writeJSON(ctx, mod, result)
+		}).
+		Export("exec_command").
 
 		// ── env_get → {"value": "...", "error": ""} ──
 		NewFunctionBuilder().

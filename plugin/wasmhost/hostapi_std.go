@@ -10,12 +10,15 @@ import (
 )
 
 // NewHostAPI constructs a HostAPI with the given keyring and sensible
-// defaults for HTTP (net/http) and logging (standard log adapter).
+// defaults for HTTP (net/http), logging (standard log adapter), and
+// command execution (os/exec child process). Substitute any field to
+// override a capability (e.g. a sandboxed Executor).
 func NewHostAPI(kr Keyring) *HostAPI {
 	return &HostAPI{
-		Keyring: kr,
-		HTTP:    NewHTTPClient(),
-		Logger:  &logAdapter{},
+		Keyring:  kr,
+		HTTP:     NewHTTPClient(),
+		Logger:   &logAdapter{},
+		Executor: NewStdExecutor(),
 	}
 }
 

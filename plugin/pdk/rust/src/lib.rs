@@ -21,13 +21,13 @@ pub mod host;
 
 // ── allocator ──
 
-// First-fit free-list allocator over a static 128 KB heap.
+// First-fit free-list allocator over a static 4 MiB heap.
 //
 // Memory is a working set, not a lifetime accumulator: dealloc actually
 // reclaims and freed blocks coalesce with their neighbours, so long-lived
 // plugin processes don't exhaust the heap (the previous bump allocator
 // never freed anything — every call leaked its input, output, and host
-// response buffers, and a ~50-turn conversation could empty the 128 KB).
+// response buffers, and a ~50-turn conversation could empty a 128 KB heap).
 //
 // Block layout (wasm32 — 32-bit words):
 //
@@ -41,7 +41,7 @@ pub mod host;
 //
 // Free blocks form a singly linked list (first-fit). dealloc coalesces
 // with the next block in O(1) (every block carries its size) and with the
-// previous block via a free-list walk (O(n) — n stays tiny on 128 KB).
+// previous block via a free-list walk (O(n) — n stays tiny on 4 MiB).
 //
 // dealloc is defensive: pointers outside the heap range, misaligned
 // pointers, and double frees are silent no-ops. That makes it safe for
@@ -53,7 +53,7 @@ pub mod host;
 
 use core::alloc::{GlobalAlloc, Layout};
 
-const HEAP_SIZE: u32 = 131_072; // 128 KB
+const HEAP_SIZE: u32 = 4_194_304; // 4 MiB
 const HEADER: u32 = 8; // size + back/next words
 const MIN_BLOCK: u32 = HEADER + 8; // smallest block that can hold a payload
 const IN_USE: u32 = 1;
@@ -470,7 +470,7 @@ mod allocator_tests {
         fresh(|| {
             let x = alloc(40, 1);
             let big = alloc(60 * 1024, 1);
-            assert!(!big.is_null(), "60KB on a fresh 128KB heap must fit");
+            assert!(!big.is_null(), "60KB on a fresh 4MiB heap must fit");
             dealloc(x);
             dealloc(big);
             // First-fit carves from the block start, so the address is not
@@ -566,8 +566,8 @@ mod allocator_tests {
             }
             assert!(!ptrs.is_empty(), "heap must fill");
             assert!(
-                ptrs.len() <= 16,
-                "8KB blocks on 128KB heap: at most 16 (got {})",
+                ptrs.len() <= 512,
+                "8KB blocks on 4MiB heap: at most 512 (got {})",
                 ptrs.len()
             );
             // Free two, then a same-size alloc must succeed.

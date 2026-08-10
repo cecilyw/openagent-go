@@ -48,6 +48,41 @@ type FS interface {
 	ReadDir(path string) ([]os.DirEntry, error)
 }
 
+// Executor abstracts command execution for WASM plugins. The default
+// implementation (stdExecutor) runs the command as a child process; a
+// deployment can substitute a sandboxed executor (container, seccomp, ...)
+// without touching the plugin ABI.
+type Executor interface {
+	Exec(ctx context.Context, req ExecRequest) ExecResult
+}
+
+// ExecRequest describes one command invocation.
+type ExecRequest struct {
+	// Cmd is the program name (host PATH lookup) or an explicit path.
+	Cmd string
+	// Args is argv after the program.
+	Args []string
+	// Cwd is the working directory; empty = inherit the host process cwd.
+	Cwd string
+	// Env overrides/adds environment variables (inherited from the host
+	// process environment). Empty/nil = pure inheritance.
+	Env map[string]string
+	// TimeoutMS bounds the invocation; 0 = default (ExecDefaultTimeout).
+	// Values above ExecMaxTimeout are clamped.
+	TimeoutMS int
+}
+
+// ExecResult is the outcome of one command invocation.
+type ExecResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+	// Err is non-nil only when the command could not run at all (not
+	// found, cwd invalid), timed out, or exceeded the output cap. A
+	// non-zero exit code is a business result, NOT an error.
+	Err error
+}
+
 // Logger abstracts structured logging for WASM plugins.
 type Logger interface {
 	Info(msg string)
@@ -81,12 +116,16 @@ const (
 //
 // By default every export is available to every plugin — the host trusts
 // its plugins. Restricted deployments should set Deny to return an error
-// for sensitive exports (keyring_*, http_request, fs_*, runtime_set_*).
+// for sensitive exports (keyring_*, http_request, fs_*, env_*,
+// exec_command, runtime_set_*).
 type HostAPI struct {
 	Keyring Keyring
 	HTTP    HTTPClient
 	FS      FS
 	Logger  Logger
+	// Executor runs commands for exec_command. nil = the export reports
+	// "exec not available".
+	Executor Executor
 	// Deny, when non-nil, is consulted for every sensitive export by
 	// name; returning true makes the export fail with "export disabled".
 	// nil = all exports allowed.

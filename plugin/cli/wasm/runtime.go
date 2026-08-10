@@ -22,7 +22,10 @@ type Runtime struct {
 // client, and slog-backed logger. Callers that need a custom HostAPI can
 // construct one via wasmhost.NewHostAPI and register it directly.
 func NewRuntime(ctx context.Context) (*Runtime, error) {
-	rt := wazero.NewRuntime(ctx)
+	// Same 512 MiB per-plugin linear-memory cap as the agent plugin
+	// loader (see plugin/agent/wasm/loader.go) — PDK plugins never grow,
+	// the cap only fences off a runaway third-party memory.grow.
+	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithMemoryLimitPages(8192))
 
 	h := wasmhost.NewHostAPI(keyring.NewKeyring())
 	if err := h.RegisterHostModule(ctx, rt); err != nil {

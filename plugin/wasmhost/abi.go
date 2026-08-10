@@ -49,6 +49,14 @@ func ReadString(mod api.Module, ptr, length uint32) string {
 
 // WriteString writes data into guest memory via the guest's alloc function.
 // Caller provides the context for the alloc call.
+//
+// Allocation failure (guest heap exhausted) returns 0 — the caller sees
+// an empty result instead of a (0, len) pair that would make the guest
+// read garbage at address 0 (serde then panics on the bogus length, or
+// worse, silently parses heap bytes). The empty result is the guest's
+// signal that something went wrong; the host-side callers that produce
+// large payloads (exec_command) additionally reject oversized responses
+// with a specific error before this point.
 func WriteString(ctx context.Context, mod api.Module, data []byte) uint64 {
 	if len(data) == 0 {
 		return 0
@@ -58,11 +66,13 @@ func WriteString(ctx context.Context, mod api.Module, data []byte) uint64 {
 		return 0
 	}
 	results, err := allocFn.Call(ctx, uint64(len(data)))
-	if err != nil || len(results) == 0 {
-		return 0
+	if err != nil || len(results) == 0 || results[0] == 0 {
+		return 0 // alloc returned null — guest heap exhausted
 	}
 	ptr := uint32(results[0])
-	mod.Memory().Write(ptr, data)
+	if !mod.Memory().Write(ptr, data) {
+		return 0 // out of bounds — never hand the guest a bogus (ptr, len)
+	}
 	return Pack(ptr, uint32(len(data)))
 }
 

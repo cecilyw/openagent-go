@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -251,6 +252,14 @@ func buildServeCmd(cfg config.Config) *cobra.Command {
 		Short:        "Start the server (REST by default, or --acp for ACP)",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Process-level soft memory limit: beyond this the Go GC
+			// runs aggressively instead of letting the heap grow toward
+			// the host's physical memory. Soft — it never rejects an
+			// allocation; it only pressures the GC. WASM plugin memory
+			// is long-lived (never collected), so the real per-plugin
+			// fence is the 512 MiB linear-memory cap in the plugin
+			// loaders; this bounds the rest of the process.
+			debug.SetMemoryLimit(512 << 20)
 			parseCapabilities(cmd, &caps)
 			isACP, _ := cmd.Flags().GetBool("acp")
 			channelFlag, _ := cmd.Flags().GetString("channel")
