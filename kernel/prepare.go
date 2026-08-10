@@ -179,10 +179,18 @@ func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session)
 					overflow = len(msgs)
 				}
 			} else {
-				// Compaction failed: trimming would drop the head with no
-				// summary to cover it — keep the whole working set and let
-				// the hard window check surface the overflow (fail-loud).
-				overflow = len(msgs)
+ 				// Compaction failed: the summary does NOT cover the head.
+				// The original fail-loud design kept the whole working set
+				// and let the hard window check error. But when the summarizer
+				// fails persistently (429, timeout, network), this makes every
+				// turn return the FULL un-trimmed history — across sessions the
+				// prompt grows ~2× per run (370K → 730K) and every run crashes.
+				// Degrade instead: trim to budget from the tail (keep the most
+				// recent messages), losing the oldest un-summarized messages.
+				// They remain in the store (never deleted); a later successful
+				// compaction can still fold them into a summary. Losing history
+				// is better than crashing every run.
+				overflow = openagent.SafeCompressionBoundary(msgs, overflow)
 			}
 		}
 	}
@@ -203,7 +211,18 @@ func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session)
 	if rt.deps.Compressor == nil {
 		return msgs, ci, nil
 	}
-	if ci.count == 0 {
+	if ci.count == 0 && ci.err == nil {
+		// No compaction advanced AND no failure — budget fit or silent no-op.
+		// Keep everything (trimming would drop the head with no summary).
+		return msgs, ci, nil
+	}
+	if ci.count == 0 && ci.err != nil {
+		// Compaction failed: trim to budget from the tail (degrade gracefully
+		// — see the comment at the failure site above). overflow was set to
+		// the SafeCompressionBoundary of the token-trim point.
+		if overflow < len(msgs) {
+			return msgs[overflow:], ci, nil
+		}
 		return msgs, ci, nil
 	}
 	return msgs[overflow:], ci, nil
