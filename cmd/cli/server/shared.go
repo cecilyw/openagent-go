@@ -33,11 +33,11 @@ import (
 // ── Shared agent setup ──
 
 // buildMemory opens the SQLite session store and knowledge provider under
-// profilesDir/memory/. The conversation (SessionStore/Compressor) and the
+// config.Dir()/memory/. The conversation (SessionStore/Compressor) and the
 // knowledge provider (MemoryProvider) share one database file via separate
 // connections (WAL); the metadata Store shares the conversation connection.
-func buildMemory(profilesDir string, emb config.EmbeddingConfig, embedder bool) (*sessionsqlite.MessageStore, ctxpkg.MemoryProvider, session.Store, func(), error) {
-	memDir := filepath.Join(profilesDir, "memory")
+func buildMemory(emb config.EmbeddingConfig, embedder bool) (*sessionsqlite.MessageStore, ctxpkg.MemoryProvider, session.Store, func(), error) {
+	memDir := filepath.Join(configDir(), "memory")
 	_ = os.MkdirAll(memDir, 0755)
 	path := filepath.Join(memDir, "memory.db")
 	ms, err := sessionsqlite.NewMessageStore(path)
@@ -242,7 +242,7 @@ IMPORTANT: Help the user complete tasks by using available tools when appropriat
 // systemContextPrompt is the built-in default for SYSTEM.md.
 // It is a system-level prompt slot for environment-wide instructions that
 // sit between persona (SOUL.md) and methodology (AGENTS.md). Override by
-// placing SYSTEM.md in the profiles directory.
+// placing SYSTEM.md in the profile directory.
 const systemContextPrompt = `# System Instructions
 CRITICAL: Do not claim completion unless the relevant work has actually been performed or verified.
 IMPORTANT: Be concise, practical, and action-oriented.
@@ -256,71 +256,71 @@ IMPORTANT: Keep user-facing text focused on progress, decisions, results, and ne
 - Avoid repeating the same status update unless new information was learned.
 `
 
-// resolveProfilesDir resolves the profiles directory to an absolute path.
-// $(pwd)/$(profiles) takes priority, ~/$(profiles) is fallback.
-func resolveProfilesDir(profiles string) string {
-	if profiles == "" {
-		profiles = ".openagent"
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		p := filepath.Join(cwd, profiles)
-		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			return p
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, profiles)
-	}
-	return filepath.Join(os.TempDir(), profiles)
+// profileDir returns the prompt content directory: config.Dir()/
+// profile — a fixed subdirectory of the configuration directory, so
+// OPENAGENT_CLI_CONFIG is the single root for every persistent path.
+func profileDir() string {
+	return filepath.Join(configDir(), "profile")
 }
 
-// resolveProfiles reads SOUL.md, SYSTEM.md, and AGENTS.md from the profiles
+// resolvePluginsDir returns the agent plugin directory: config.Dir()/
+// plugins — the same root as the CLI plugin default (config.DefaultPluginsDir),
+// so all plugins live in one place regardless of loader.
+func resolvePluginsDir() string {
+	return filepath.Join(configDir(), "plugins")
+}
+
+// configDir returns the configuration directory (config.Dir), with a
+// home fallback when it cannot be resolved.
+func configDir() string {
+	dir, err := config.Dir()
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".openagent")
+	}
+	return dir
+}
+
+// resolveProfiles reads SOUL.md, SYSTEM.md, and AGENTS.md: project-level
 // directory. Falls back to built-in defaults when the files are missing.
 //
-// cwd is the working directory to search for project-level profiles; if empty,
+// cwd is the working directory to search for project-level prompts; if empty,
 // os.Getwd() is used.
 //
 // Resolution order (per file):
-//  1. $(cwd)/FILE.md, $(cwd)/$(profiles)/FILE.md
-//  2. ~/$(profiles)/FILE.md
+//  1. $(cwd)/FILE.md
+//  2. <config-dir>/profile/FILE.md
 //  3. built-in default
 //
 // The prompts are returned in injection order: SOUL → SYSTEM → AGENTS.
-func resolveProfiles(profiles, cwd string) []string {
+func resolveProfiles(cwd string) []string {
 	return []string{
-		resolveProfileFile(profiles, cwd, "SOUL.md", personaAndLimitsPrompt),
-		resolveProfileFile(profiles, cwd, "SYSTEM.md", systemContextPrompt),
-		resolveProfileFile(profiles, cwd, "AGENTS.md", methodologyAndRulesPrompt),
+		resolveProfileFile(cwd, "SOUL.md", personaAndLimitsPrompt),
+		resolveProfileFile(cwd, "SYSTEM.md", systemContextPrompt),
+		resolveProfileFile(cwd, "AGENTS.md", methodologyAndRulesPrompt),
 	}
 }
 
-func resolveProfileFile(profiles, cwd, filename, defaultText string) string {
-	if profiles == "" {
-		return defaultText
-	}
+func resolveProfileFile(cwd, filename, defaultText string) string {
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
 
-	// 1.  Project-level: $(cwd)/FILE.md, $(cwd)/$(profiles)/FILE.md
+	// 1.  Project-level: $(cwd)/FILE.md (AGENTS.md convention — the
+	// project's own prompt lives with the project).
 	if cwd != "" {
 		p := filepath.Join(cwd, filename)
 		if data, err := os.ReadFile(p); err == nil {
 			return strings.TrimSpace(string(data))
 		}
-
-		q := filepath.Join(cwd, profiles, filename)
-		if data, err := os.ReadFile(q); err == nil {
-			return strings.TrimSpace(string(data))
-		}
 	}
 
-	// 2.  User-level: ~/$(profiles)/FILE.md
-	if home, err := os.UserHomeDir(); err == nil {
-		p := filepath.Join(home, profiles, filename)
-		if data, err := os.ReadFile(p); err == nil {
-			return strings.TrimSpace(string(data))
-		}
+	// 2.  User-level: <config-dir>/profile/FILE.md — a custom
+	// directory derives from the configuration directory, so a custom
+	// OPENAGENT_CLI_CONFIG relocates the prompts with it.
+	p := filepath.Join(profileDir(), filename)
+	if data, err := os.ReadFile(p); err == nil {
+		return strings.TrimSpace(string(data))
 	}
 
 	// 3.  Built-in default
@@ -438,4 +438,11 @@ func buildRuntimeDeps(caps config.Capabilities, sensitive config.SensitiveConfig
 		),
 		Observer: buildSlogObserver(),
 	}
+}
+
+// channelDir returns the per-channel state directory: config.Dir()/
+// channel/<name> — channel locks, credentials, QR caches, and media
+// live beside memory and profile, not inside either.
+func channelDir(name string) string {
+	return filepath.Join(configDir(), "channel", name)
 }

@@ -20,7 +20,6 @@ type Config struct {
 	Log          LogConfig                  `json:"log,omitempty"`
 	McpServers   map[string]McpServerConfig `json:"mcp_servers,omitempty"`
 	Plugins      []string                   `json:"plugins,omitempty"`
-	Profiles     string                     `json:"profiles,omitempty"`
 	Env          map[string]string          `json:"env,omitempty"`
 	Sensitive    SensitiveConfig            `json:"sensitive,omitempty"`
 	Capabilities Capabilities               `json:"capabilities,omitempty"`
@@ -252,8 +251,26 @@ func Path() (string, error) {
 	return filepath.Join(home, ".openagent", "settings.json"), nil
 }
 
-// DefaultPluginsDir returns the default plugins directory.
+// Dir returns the configuration directory — the directory that contains
+// settings.json (OPENAGENT_CLI_CONFIG or the default). Every persistent
+// path (profile, plugins, channel state) derives from this single root,
+// so pointing OPENAGENT_CLI_CONFIG at a custom settings file relocates
+// the whole working set with it.
+func Dir() (string, error) {
+	p, err := Path()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(p), nil
+}
+
+// DefaultPluginsDir returns the default plugins directory under the
+// configuration directory. Falls back to ~/.openagent/plugins when the
+// config dir cannot be resolved.
 func DefaultPluginsDir() string {
+	if dir, err := Dir(); err == nil {
+		return filepath.Join(dir, "plugins")
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".openagent", "plugins")
 }
@@ -276,9 +293,6 @@ func ApplyDefaults(cfg *Config, settingsPath string) {
 	}
 	if len(cfg.Plugins) == 0 {
 		cfg.Plugins = []string{DefaultPluginsDir()}
-	}
-	if cfg.Profiles == "" {
-		cfg.Profiles = ".openagent/profile"
 	}
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 8080

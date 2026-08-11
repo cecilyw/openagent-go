@@ -141,7 +141,7 @@ func (m *Manager) loadOne(ctx context.Context, path string) error {
 	case PluginTypeObservers:
 		m.observers = append(m.observers, &wasmObserver{mod: mod, meta: meta, name: meta.Name})
 	default:
-		slog.Info("wasm skipping unknown plugin type", "file", filepath.Base(path), "type", meta.Type)
+		slog.Debug("wasm skipping non-agent plugin type", "file", filepath.Base(path), "type", meta.Type)
 		return nil
 	}
 

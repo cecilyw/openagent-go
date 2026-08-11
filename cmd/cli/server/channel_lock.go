@@ -16,10 +16,10 @@ import (
 // WebSocket), so two concurrently started servers cannot race the shared
 // credential file or the connection.
 //
-// The lock file lives under the channel's profile directory
-// ($profile/channel/<name>/), never CWD: the server may be started from
+// The lock file lives under config.Dir()/channel/<name>/, never CWD:
+// the server may be started from
 // any directory, and the lock is the same one regardless. Different
-// profiles = different locks = independent channel instances (the
+// config dirs = different locks = independent channel instances (the
 // multi-bot deployment model). The underlying flock is released by the
 // kernel when the process dies (even a crash), so there is no
 // stale-lock problem.
@@ -28,10 +28,10 @@ type ChannelLock struct {
 }
 
 // AcquireChannelLock takes the machine-level lock for the named channel
-// under the given profile directory. Returns an error when another
+// under config.Dir()/channel/. Returns an error when another
 // instance holds it.
-func AcquireChannelLock(profiles, name string) (*ChannelLock, error) {
-	p := filepath.Join(resolveProfilesDir(profiles), "channel", name, name+".lock")
+func AcquireChannelLock(name string) (*ChannelLock, error) {
+	p := filepath.Join(channelDir(name), name+".lock")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return nil, err
 	}
@@ -58,10 +58,10 @@ func AcquireChannelLock(profiles, name string) (*ChannelLock, error) {
 // The handoff is race-free: the old goroutine releases ITS lock only
 // when it exits (the connection is dead by then), so the new connect
 // can never double-run against a live connection.
-func AcquireChannelLockRetry(profiles, name string, timeout time.Duration) (*ChannelLock, error) {
+func AcquireChannelLockRetry(name string, timeout time.Duration) (*ChannelLock, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		lock, err := AcquireChannelLock(profiles, name)
+		lock, err := AcquireChannelLock(name)
 		if err == nil {
 			return lock, nil
 		}

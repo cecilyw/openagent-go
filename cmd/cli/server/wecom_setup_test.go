@@ -76,7 +76,7 @@ func TestClearWecomCredentialsPreservesOtherFields(t *testing.T) {
 	if err := saveWecomToSettings(WecomCredentials{BotID: "bot-new", Secret: "sec-new"}); err != nil {
 		t.Fatal(err)
 	}
-	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Profiles: ".openagent/profile", Deps: kernel.Deps{}}, nil)
+	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	if err := m.ClearCredentials(); err != nil {
 		t.Fatal(err)
 	}
@@ -106,10 +106,10 @@ func TestClearWecomCredentialsPreservesOtherFields(t *testing.T) {
 
 // The QR cache round-trips URL, image, and absolute expiry.
 func TestWecomQRCacheRoundTrip(t *testing.T) {
-	profiles := filepath.Join(t.TempDir(), "profile")
-	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Profiles: profiles, Deps: kernel.Deps{}}, nil)
+	t.Setenv("OPENAGENT_CLI_CONFIG", filepath.Join(t.TempDir(), "settings.json"))
+	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 
-	if err := saveWecomQR(profiles, "https://auth.example/x", 300); err != nil {
+	if err := saveWecomQR("https://auth.example/x", 300); err != nil {
 		t.Fatal(err)
 	}
 	url, img, expireIn := m.QR()
@@ -126,7 +126,7 @@ func TestWecomQRCacheRoundTrip(t *testing.T) {
 		t.Fatalf("second read grew: %d > %d", again, expireIn)
 	}
 
-	clearWecomQR(profiles)
+	clearWecomQR()
 	if url, _, expireIn := m.QR(); url != "" || expireIn != 0 {
 		t.Fatalf("cache not cleared: url=%q expireIn=%d", url, expireIn)
 	}
@@ -134,13 +134,13 @@ func TestWecomQRCacheRoundTrip(t *testing.T) {
 
 // An expired QR reports expireIn 0.
 func TestWecomQRExpired(t *testing.T) {
-	profiles := filepath.Join(t.TempDir(), "profile")
-	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Profiles: profiles, Deps: kernel.Deps{}}, nil)
+	t.Setenv("OPENAGENT_CLI_CONFIG", filepath.Join(t.TempDir(), "settings.json"))
+	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 
-	if err := saveWecomQR(profiles, "https://auth.example/x", 300); err != nil {
+	if err := saveWecomQR("https://auth.example/x", 300); err != nil {
 		t.Fatal(err)
 	}
-	_, _, expiresAtPath := wecomQRPath(profiles)
+	_, _, expiresAtPath := wecomQRPath()
 	if err := os.WriteFile(expiresAtPath, []byte(strconv.FormatInt(time.Now().Unix()-1, 10)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestWecomQRExpired(t *testing.T) {
 
 // SetCredentials is rejected while QR authorization is in flight.
 func TestWecomSetCredentialsRejectedWhileRegistering(t *testing.T) {
-	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	m.mu.Lock()
 	m.status = clirest.WecomStatus{Phase: clirest.WecomRegistering}
 	m.mu.Unlock()
@@ -171,7 +171,7 @@ func TestWecomSetCredentialsRejectedWhileRegistering(t *testing.T) {
 
 // A disconnect whose flow is stuck must return within disconnectTimeout.
 func TestWecomDisconnectTimesOutOnStuckFlow(t *testing.T) {
-	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	cancelled := make(chan struct{})
 	m.mu.Lock()
 	m.cancel = func() { close(cancelled) }
@@ -196,7 +196,7 @@ func TestWecomDisconnectTimesOutOnStuckFlow(t *testing.T) {
 // setStatus guards: stale publishes are dropped, the current owner's go
 // through.
 func TestWecomSetStatusGuardDropsStalePublish(t *testing.T) {
-	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	current := make(chan struct{})
 	m.mu.Lock()
 	m.done = current
@@ -215,7 +215,7 @@ func TestWecomSetStatusGuardDropsStalePublish(t *testing.T) {
 
 // A flow's own terminal publish must not be dropped by its cleanup.
 func TestWecomFlowTerminalPublishSurvivesOwnCleanup(t *testing.T) {
-	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWecomManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	done := make(chan struct{})
 	m.mu.Lock()
 	m.done = done

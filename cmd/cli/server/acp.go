@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	openagent "github.com/yusheng-g/openagent-go"
 	"github.com/yusheng-g/openagent-go/acp"
@@ -33,8 +32,7 @@ import (
 //  5. Construct the agent.
 //  6. Wrap in AgentServer, launch ACP protocol mux on stdin/stdout.
 func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) error {
-	profilesDir := resolveProfilesDir(cfg.Profiles)
-	ms, knowledge, sessionStore, cleanup, err := buildMemory(profilesDir, cfg.Embedding, caps.OnEmbedder())
+	ms, knowledge, sessionStore, cleanup, err := buildMemory(cfg.Embedding, caps.OnEmbedder())
 	if err != nil {
 		return err
 	}
@@ -66,7 +64,7 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 	// prompts, limits, guards, skills); runtime capabilities live in
 	// kernel.Deps.
 	opts := []agent.Option{
-		agent.WithSystemPrompts(resolveProfiles(cfg.Profiles, "")...),
+		agent.WithSystemPrompts(resolveProfiles("")...),
 		agent.WithMaxTurns(100),
 	}
 	opts, skillProvider := buildOpts(opts, caps, firstM)
@@ -93,7 +91,7 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 	// Discover before constructing the server so a plugin observer can be
 	// merged into deps.Observer before the AgentServer snapshots it.
 	var pluginMgr *wasm.Manager
-	pluginDir := filepath.Join(profilesDir, "plugins")
+	pluginDir := resolvePluginsDir()
 	sch := scheduler.New()
 	go sch.Run(ctx)
 	mgr := wasm.NewManager(pluginDir).
@@ -134,7 +132,7 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 	srv.Summarizer = sumz
 	srv.Extractor = extractor
 	srv.ProfileResolver = func(cwd string) []string {
-		return resolveProfiles(cfg.Profiles, cwd)
+		return resolveProfiles(cwd)
 	}
 
 	// Register model configs for runtime_set_model_config.
@@ -189,7 +187,6 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 
 	if _, _, _, err := RunChannels(ChannelEnv{
 		Ctx:         ctx,
-		Profiles:    cfg.Profiles,
 		Cfg:         channelCfg,
 		Deps:        channelDeps,
 		DefaultMode: cfg.DefaultMode,

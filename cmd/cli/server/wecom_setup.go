@@ -30,7 +30,7 @@ type WecomCredentials struct {
 //
 // onQR, when non-nil, receives the QR content (an API-driven caller
 // renders it); nil renders the QR in the terminal.
-func ResolveWecomCredentials(ctx context.Context, profiles string, onQR func(url string, expireIn int)) (WecomCredentials, error) {
+func ResolveWecomCredentials(ctx context.Context, onQR func(url string, expireIn int)) (WecomCredentials, error) {
 	qr, err := wecom.GenerateQR(ctx)
 	if err != nil {
 		return WecomCredentials{}, fmt.Errorf("wecom qr: %w", err)
@@ -40,7 +40,7 @@ func ResolveWecomCredentials(ctx context.Context, profiles string, onQR func(url
 	// after a refresh. The official flow has no explicit expiry in the
 	// response — the cache TTL is a frontend countdown cap; the poll
 	// itself times out after 5 minutes.
-	if err := saveWecomQR(profiles, qr.AuthURL, wecomQRCacheTTL); err != nil {
+	if err := saveWecomQR(qr.AuthURL, wecomQRCacheTTL); err != nil {
 		fmt.Fprintf(os.Stderr, "wecom: failed to cache QR: %v\n", err)
 	}
 	if onQR != nil {
@@ -74,15 +74,15 @@ const wecomQRCacheTTL = 300
 
 // ── QR cache ──
 
-// wecomQRPath returns the QR cache paths under the profile's channel
+// wecomQRPath returns the QR cache paths under config.Dir()/channel/wecom
 // directory (mirrors the feishu/wechat cache layout).
-func wecomQRPath(profiles string) (urlPath, imgPath, expiresAtPath string) {
-	dir := filepath.Join(resolveProfilesDir(profiles), "channel", "wecom")
+func wecomQRPath() (urlPath, imgPath, expiresAtPath string) {
+	dir := channelDir("wecom")
 	return filepath.Join(dir, "qr_url"), filepath.Join(dir, "qr_img_base64"), filepath.Join(dir, "qr_expires_at")
 }
 
-func saveWecomQR(profiles, url string, expireIn int) error {
-	urlPath, imgPath, expiresAtPath := wecomQRPath(profiles)
+func saveWecomQR(url string, expireIn int) error {
+	urlPath, imgPath, expiresAtPath := wecomQRPath()
 	if err := os.MkdirAll(filepath.Dir(urlPath), 0o755); err != nil {
 		return err
 	}
@@ -99,8 +99,8 @@ func saveWecomQR(profiles, url string, expireIn int) error {
 	return os.WriteFile(expiresAtPath, []byte(strconv.FormatInt(time.Now().Unix()+int64(expireIn), 10)), 0o600)
 }
 
-func loadWecomQR(profiles string) (url, imgBase64 string, expiresAt int64) {
-	urlPath, imgPath, expiresAtPath := wecomQRPath(profiles)
+func loadWecomQR() (url, imgBase64 string, expiresAt int64) {
+	urlPath, imgPath, expiresAtPath := wecomQRPath()
 	if b, err := os.ReadFile(urlPath); err == nil {
 		url = string(b)
 	}
@@ -113,8 +113,8 @@ func loadWecomQR(profiles string) (url, imgBase64 string, expiresAt int64) {
 	return url, imgBase64, expiresAt
 }
 
-func clearWecomQR(profiles string) {
-	urlPath, imgPath, expiresAtPath := wecomQRPath(profiles)
+func clearWecomQR() {
+	urlPath, imgPath, expiresAtPath := wecomQRPath()
 	os.Remove(urlPath)
 	os.Remove(imgPath)
 	os.Remove(expiresAtPath)

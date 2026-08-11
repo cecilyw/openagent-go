@@ -11,10 +11,10 @@ import (
 // AcquireChannelLock must be exclusive per machine, independent of the
 // process working directory, and re-acquirable after release.
 func TestChannelLockExclusive(t *testing.T) {
-	profiles := isolateProfiles(t)
-	lockPath := filepath.Join(resolveProfilesDir(profiles), "channel", "feishu", "feishu.lock")
+	isolateConfig(t)
+	lockPath := filepath.Join(channelDir("feishu"), "feishu.lock")
 
-	l1, err := AcquireChannelLock(profiles, "feishu")
+	l1, err := AcquireChannelLock("feishu")
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
@@ -26,14 +26,14 @@ func TestChannelLockExclusive(t *testing.T) {
 	}
 
 	// Second acquire must fail — same profile, same machine.
-	if _, err := AcquireChannelLock(profiles, "feishu"); err == nil {
+	if _, err := AcquireChannelLock("feishu"); err == nil {
 		t.Fatal("second acquire succeeded; lock not exclusive")
 	} else if !strings.Contains(err.Error(), "held by another process") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Different channel name = independent lock.
-	l2, err := AcquireChannelLock(profiles, "slack")
+	l2, err := AcquireChannelLock("slack")
 	if err != nil {
 		t.Fatalf("different channel lock should be free: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestChannelLockExclusive(t *testing.T) {
 
 	// After release the lock is re-acquirable.
 	l1.Release()
-	l3, err := AcquireChannelLock(profiles, "feishu")
+	l3, err := AcquireChannelLock("feishu")
 	if err != nil {
 		t.Fatalf("re-acquire after release: %v", err)
 	}

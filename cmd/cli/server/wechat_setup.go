@@ -43,7 +43,7 @@ func (c WechatCredentials) toProtocol() *protocol.Credentials {
 // code; nil = terminal rendering and stdin prompt). onVerifyCode receives
 // the login context — a cancelled login (disconnect) must unblock the
 // pairing-code wait.
-func ResolveWechatCredentials(ctx context.Context, profiles string, localCreds *protocol.Credentials, onQR func(url string, expireIn int), onScanned func(), onVerifyCode func(ctx context.Context, isRetry bool) (string, error)) (WechatCredentials, error) {
+func ResolveWechatCredentials(ctx context.Context, localCreds *protocol.Credentials, onQR func(url string, expireIn int), onScanned func(), onVerifyCode func(ctx context.Context, isRetry bool) (string, error)) (WechatCredentials, error) {
 	client := protocol.NewClient()
 	baseURL := ""
 	if localCreds != nil {
@@ -57,7 +57,7 @@ func ResolveWechatCredentials(ctx context.Context, profiles string, localCreds *
 			// re-fetch it after a refresh. The ilinkai QR response has no
 			// explicit expiry — the cache keeps a generous TTL; the
 			// frontend stops counting down when the registration ends.
-			if err := saveWechatQR(profiles, url, qrCacheTTL); err != nil {
+			if err := saveWechatQR(url, qrCacheTTL); err != nil {
 				fmt.Fprintf(os.Stderr, "wechat: failed to cache QR: %v\n", err)
 			}
 			if onQR != nil {
@@ -72,7 +72,7 @@ func ResolveWechatCredentials(ctx context.Context, profiles string, localCreds *
 		},
 		OnScanned: onScanned,
 		OnExpired: func() {
-			clearWechatQR(profiles)
+			clearWechatQR()
 		},
 		OnVerifyCode: onVerifyCode,
 	})
@@ -103,18 +103,18 @@ const qrCacheTTL = 600
 
 // ── QR cache ──
 
-// wechatQRPath returns the QR cache paths under the profile's channel
+// wechatQRPath returns the QR cache paths under config.Dir()/channel/wechat
 // directory (mirrors the feishu cache layout).
-func wechatQRPath(profiles string) (urlPath, imgPath, expiresAtPath string) {
-	dir := filepath.Join(resolveProfilesDir(profiles), "channel", "wechat")
+func wechatQRPath() (urlPath, imgPath, expiresAtPath string) {
+	dir := channelDir("wechat")
 	return filepath.Join(dir, "qr_url"), filepath.Join(dir, "qr_img_base64"), filepath.Join(dir, "qr_expires_at")
 }
 
 // saveWechatQR persists the registration QR (URL + base64 PNG image) and
 // its expiry. Best-effort cache: a failed write only costs a
 // re-registration.
-func saveWechatQR(profiles, url string, expireIn int) error {
-	urlPath, imgPath, expiresAtPath := wechatQRPath(profiles)
+func saveWechatQR(url string, expireIn int) error {
+	urlPath, imgPath, expiresAtPath := wechatQRPath()
 	if err := os.MkdirAll(filepath.Dir(urlPath), 0o755); err != nil {
 		return err
 	}
@@ -133,8 +133,8 @@ func saveWechatQR(profiles, url string, expireIn int) error {
 
 // loadWechatQR reads the cached registration QR (empty strings and a
 // zero expiry when none).
-func loadWechatQR(profiles string) (url, imgBase64 string, expiresAt int64) {
-	urlPath, imgPath, expiresAtPath := wechatQRPath(profiles)
+func loadWechatQR() (url, imgBase64 string, expiresAt int64) {
+	urlPath, imgPath, expiresAtPath := wechatQRPath()
 	if b, err := os.ReadFile(urlPath); err == nil {
 		url = string(b)
 	}
@@ -148,8 +148,8 @@ func loadWechatQR(profiles string) (url, imgBase64 string, expiresAt int64) {
 }
 
 // clearWechatQR removes the QR cache (registration finished, expired).
-func clearWechatQR(profiles string) {
-	urlPath, imgPath, expiresAtPath := wechatQRPath(profiles)
+func clearWechatQR() {
+	urlPath, imgPath, expiresAtPath := wechatQRPath()
 	os.Remove(urlPath)
 	os.Remove(imgPath)
 	os.Remove(expiresAtPath)

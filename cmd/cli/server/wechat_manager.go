@@ -44,7 +44,6 @@ var _ clirest.WechatChannel = (*WechatManager)(nil)
 
 type WechatManager struct {
 	baseCtx   context.Context
-	profiles  string
 	cfg       *agent.Agent
 	deps      kernel.Deps
 	wechatCfg *config.WechatConfig // settings.json channels.wechat (may be nil)
@@ -70,7 +69,6 @@ type WechatManager struct {
 func NewWechatManager(env ChannelEnv, wechatCfg *config.WechatConfig) *WechatManager {
 	return &WechatManager{
 		baseCtx:   env.Ctx,
-		profiles:  env.Profiles,
 		wechatCfg: wechatCfg,
 		cfg:       env.Cfg,
 		deps:      env.Deps,
@@ -143,7 +141,7 @@ func (m *WechatManager) ConnectAsync(onQR func(url string, expireIn int), onScan
 	// Retry-windowed for the same reason as feishu: a disconnect that
 	// abandoned a stuck goroutine leaves the flock held momentarily (see
 	// AcquireChannelLockRetry).
-	lock, err := AcquireChannelLockRetry(m.profiles, "wechat", lockRetryWindow)
+	lock, err := AcquireChannelLockRetry("wechat", lockRetryWindow)
 	if err != nil {
 		return false, err
 	}
@@ -175,7 +173,7 @@ func (m *WechatManager) ConnectAsync(onQR func(url string, expireIn int), onScan
 		m.mu.Lock()
 		localCreds := wechatConfigFromSettings(m.wechatCfg)
 		m.mu.Unlock()
-		creds, rerr := ResolveWechatCredentials(regCtx, m.profiles, localCreds, onQR, func() {
+		creds, rerr := ResolveWechatCredentials(regCtx, localCreds, onQR, func() {
 			// QR scanned — the frontend flips its hint from "scan" to
 			// "confirm on your phone". Guarded like every other publish
 			// from this goroutine: a disconnect that took over the
@@ -184,7 +182,7 @@ func (m *WechatManager) ConnectAsync(onQR func(url string, expireIn int), onScan
 		}, m.waitVerifyCode)
 		if rerr != nil {
 			lock.Release()
-			clearWechatQR(m.profiles)
+			clearWechatQR()
 			m.mu.Lock()
 			disconnecting := m.stopping
 			// Clear the channel WITHOUT closing it: a concurrent
@@ -223,7 +221,7 @@ func (m *WechatManager) ConnectAsync(onQR func(url string, expireIn int), onScan
 			lock.Release()
 			return
 		}
-		clearWechatQR(m.profiles)
+		clearWechatQR()
 		m.startConnection(lock, creds.toProtocol())
 	}()
 	return true, nil
@@ -302,7 +300,7 @@ func (m *WechatManager) startConnection(lock *ChannelLock, creds *protocol.Crede
 
 	go func() {
 		defer close(connDone)
-		mediaDir := filepath.Join(resolveProfilesDir(m.profiles), "channel", "wechat", "media")
+		mediaDir := filepath.Join(channelDir("wechat"), "media")
 		ch := wechat.New(creds, mediaDir)
 		everReady := false
 		ch.SetOnReady(func() {
@@ -353,7 +351,7 @@ func (m *WechatManager) startConnection(lock *ChannelLock, creds *protocol.Crede
 // pairing-code flags from the live status). Empty when no registration is
 // in flight.
 func (m *WechatManager) QR() (url, imgBase64 string, expireIn int, scanned, verifyCodeRequired, verifyCodeRetry bool) {
-	url, imgBase64, expiresAt := loadWechatQR(m.profiles)
+	url, imgBase64, expiresAt := loadWechatQR()
 	if expiresAt > 0 {
 		remaining := expiresAt - time.Now().Unix()
 		if remaining > 0 {

@@ -24,7 +24,6 @@ import (
 // connection managers. Each manager reads only the fields it needs.
 type ChannelEnv struct {
 	Ctx         context.Context
-	Profiles    string
 	Cfg         *agent.Agent
 	Deps        kernel.Deps
 	DefaultMode string // feishu approval mode ("manual" | "auto"; empty = "manual")

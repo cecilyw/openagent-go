@@ -28,12 +28,11 @@ func isolateSettings(t *testing.T) string {
 // moved (resolveProfilesDir prefers $(pwd)/profiles) and HOME is set so
 // the fallback lands in the same sandbox. Real credentials are never
 // touched.
-func isolateProfiles(t *testing.T) string {
+func isolateConfig(t *testing.T) {
 	t.Helper()
-	dir := t.TempDir()
-	t.Chdir(dir)
-	t.Setenv("HOME", dir)
-	return ".openagent/profile"
+	// Point the config directory at a temp dir: every persistent path
+	// (profile, plugins, channel state) derives from OPENAGENT_CLI_CONFIG.
+	t.Setenv("OPENAGENT_CLI_CONFIG", filepath.Join(t.TempDir(), "settings.json"))
 }
 
 // saveFeishuToSettings must preserve every other settings field (user
@@ -94,15 +93,15 @@ func TestSaveFeishuToSettingsPreservesOtherFields(t *testing.T) {
 // must be re-acquirable by an immediate reconnect — the retry window
 // absorbs the handoff.
 func TestAcquireChannelLockRetryHandsOff(t *testing.T) {
-	profiles := filepath.Join(t.TempDir(), "profile")
-	held, err := AcquireChannelLock(profiles, "feishu")
+	t.Setenv("OPENAGENT_CLI_CONFIG", filepath.Join(t.TempDir(), "settings.json"))
+	held, err := AcquireChannelLock("feishu")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The retry must NOT succeed while the lock is held.
 	done := make(chan error, 1)
 	go func() {
-		_, err := AcquireChannelLockRetry(profiles, "feishu", 300*time.Millisecond)
+		_, err := AcquireChannelLockRetry("feishu", 300*time.Millisecond)
 		done <- err
 	}()
 	select {
@@ -116,22 +115,22 @@ func TestAcquireChannelLockRetryHandsOff(t *testing.T) {
 
 	// Release and retry again with a longer window: succeeds.
 	held.Release()
-	if _, err := AcquireChannelLockRetry(profiles, "feishu", 2*time.Second); err != nil {
+	if _, err := AcquireChannelLockRetry("feishu", 2*time.Second); err != nil {
 		t.Fatalf("retry after release failed: %v", err)
 	}
 }
 
 // A lock held by a live holder still fails after the window.
 func TestAcquireChannelLockRetryFailsWhileHeld(t *testing.T) {
-	profiles := filepath.Join(t.TempDir(), "profile")
-	held, err := AcquireChannelLock(profiles, "feishu")
+	t.Setenv("OPENAGENT_CLI_CONFIG", filepath.Join(t.TempDir(), "settings.json"))
+	held, err := AcquireChannelLock("feishu")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer held.Release()
 
 	start := time.Now()
-	if _, err := AcquireChannelLockRetry(profiles, "feishu", 300*time.Millisecond); err == nil {
+	if _, err := AcquireChannelLockRetry("feishu", 300*time.Millisecond); err == nil {
 		t.Fatal("acquired while held")
 	}
 	if elapsed := time.Since(start); elapsed < 250*time.Millisecond {
@@ -196,7 +195,7 @@ func TestClearCredentialsPreservesOtherFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Now clear via the manager path used by the DELETE endpoint.
-	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Profiles: ".openagent/profile", Deps: kernel.Deps{}}, nil)
+	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	if err := m.ClearCredentials(); err != nil {
 		t.Fatal(err)
 	}
@@ -234,10 +233,10 @@ func TestClearCredentialsPreservesOtherFields(t *testing.T) {
 // the remaining time (GET /qr returns expires_in), not the original
 // total.
 func TestFeishuQRCacheRoundTrip(t *testing.T) {
-	profiles := filepath.Join(t.TempDir(), "profile")
-	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Profiles: profiles, Deps: kernel.Deps{}}, nil)
+	t.Setenv("OPENAGENT_CLI_CONFIG", filepath.Join(t.TempDir(), "settings.json"))
+	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 
-	if err := saveFeishuQR(profiles, "https://qr.example/x", 300); err != nil {
+	if err := saveFeishuQR("https://qr.example/x", 300); err != nil {
 		t.Fatal(err)
 	}
 	url, img, expireIn := m.QR()
@@ -260,7 +259,7 @@ func TestFeishuQRCacheRoundTrip(t *testing.T) {
 		t.Fatalf("second read grew: %d > %d", again, expireIn)
 	}
 
-	clearFeishuQR(profiles)
+	clearFeishuQR()
 	if url, _, expireIn := m.QR(); url != "" || expireIn != 0 {
 		t.Fatalf("cache not cleared: url=%q expireIn=%d", url, expireIn)
 	}
@@ -270,13 +269,13 @@ func TestFeishuQRCacheRoundTrip(t *testing.T) {
 // and asks the user to re-register instead of waiting for the SDK poll
 // to surface the expiry on its next cycle.
 func TestFeishuQRExpired(t *testing.T) {
-	profiles := filepath.Join(t.TempDir(), "profile")
-	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Profiles: profiles, Deps: kernel.Deps{}}, nil)
+	t.Setenv("OPENAGENT_CLI_CONFIG", filepath.Join(t.TempDir(), "settings.json"))
+	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 
-	if err := saveFeishuQR(profiles, "https://qr.example/x", 300); err != nil {
+	if err := saveFeishuQR("https://qr.example/x", 300); err != nil {
 		t.Fatal(err)
 	}
-	_, _, expiresAtPath := feishuQRPath(profiles)
+	_, _, expiresAtPath := feishuQRPath()
 	if err := os.WriteFile(expiresAtPath, []byte(strconv.FormatInt(time.Now().Unix()-1, 10)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +293,7 @@ func TestFeishuQRExpired(t *testing.T) {
 // not cancel it, and the SDK polls without a client timeout) must return
 // within disconnectTimeout instead of hanging the endpoint.
 func TestDisconnectTimesOutOnStuckFlow(t *testing.T) {
-	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	cancelled := make(chan struct{})
 	m.mu.Lock()
 	m.cancel = func() { close(cancelled) }
@@ -322,7 +321,7 @@ func TestDisconnectTimesOutOnStuckFlow(t *testing.T) {
 // registration goroutine finishing late would clobber the state of a
 // newer connection.
 func TestSetStatusGuardDropsStalePublish(t *testing.T) {
-	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	current := make(chan struct{})
 	m.mu.Lock()
 	m.done = current
@@ -345,7 +344,7 @@ func TestSetStatusGuardDropsStalePublish(t *testing.T) {
 // cleanup (the buggy ordering) makes the guard see m.done != guard and
 // drop the publish, leaving the status stuck on the previous phase.
 func TestFlowTerminalPublishSurvivesOwnCleanup(t *testing.T) {
-	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewFeishuManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	done := make(chan struct{})
 	m.mu.Lock()
 	m.done = done

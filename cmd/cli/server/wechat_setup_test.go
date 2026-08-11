@@ -120,7 +120,7 @@ func TestClearWechatCredentialsPreservesOtherFields(t *testing.T) {
 	if err := saveWechatToSettings(WechatCredentials{Token: "tok-new"}); err != nil {
 		t.Fatal(err)
 	}
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: ".openagent/profile", Deps: kernel.Deps{}}, nil)
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	if err := m.ClearCredentials(); err != nil {
 		t.Fatal(err)
 	}
@@ -154,10 +154,10 @@ func TestClearWechatCredentialsPreservesOtherFields(t *testing.T) {
 // The QR cache round-trips URL, image, and absolute expiry; a re-read
 // never grows the remaining lifetime.
 func TestWechatQRCacheRoundTrip(t *testing.T) {
-	profiles := filepath.Join(t.TempDir(), "profile")
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: profiles, Deps: kernel.Deps{}}, nil)
+	t.Setenv("OPENAGENT_CLI_CONFIG", filepath.Join(t.TempDir(), "settings.json"))
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 
-	if err := saveWechatQR(profiles, "https://qr.example/x", 300); err != nil {
+	if err := saveWechatQR("https://qr.example/x", 300); err != nil {
 		t.Fatal(err)
 	}
 	url, img, expireIn, _, _, _ := m.QR()
@@ -174,7 +174,7 @@ func TestWechatQRCacheRoundTrip(t *testing.T) {
 		t.Fatalf("second read grew: %d > %d", again, expireIn)
 	}
 
-	clearWechatQR(profiles)
+	clearWechatQR()
 	if url, _, expireIn, _, _, _ := m.QR(); url != "" || expireIn != 0 {
 		t.Fatalf("cache not cleared: url=%q expireIn=%d", url, expireIn)
 	}
@@ -182,13 +182,13 @@ func TestWechatQRCacheRoundTrip(t *testing.T) {
 
 // An expired QR reports expireIn 0.
 func TestWechatQRExpired(t *testing.T) {
-	profiles := filepath.Join(t.TempDir(), "profile")
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: profiles, Deps: kernel.Deps{}}, nil)
+	t.Setenv("OPENAGENT_CLI_CONFIG", filepath.Join(t.TempDir(), "settings.json"))
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 
-	if err := saveWechatQR(profiles, "https://qr.example/x", 300); err != nil {
+	if err := saveWechatQR("https://qr.example/x", 300); err != nil {
 		t.Fatal(err)
 	}
-	_, _, expiresAtPath := wechatQRPath(profiles)
+	_, _, expiresAtPath := wechatQRPath()
 	if err := os.WriteFile(expiresAtPath, []byte(strconv.FormatInt(time.Now().Unix()-1, 10)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestWechatQRExpired(t *testing.T) {
 
 // SubmitVerifyCode is rejected when no registration is waiting.
 func TestWechatSubmitVerifyCodeNotPending(t *testing.T) {
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	if err := m.SubmitVerifyCode("123456"); err != clirest.ErrWechatVerifyCodeNotPending {
 		t.Fatalf("err = %v, want ErrWechatVerifyCodeNotPending", err)
 	}
@@ -215,7 +215,7 @@ func TestWechatSubmitVerifyCodeNotPending(t *testing.T) {
 // closed channel. The channel is cleared, not closed (see the failure
 // path comment in ConnectAsync).
 func TestWechatSubmitVerifyCodeRacingFailureNoPanic(t *testing.T) {
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	m.mu.Lock()
 	m.status = clirest.WechatStatus{Phase: clirest.WechatRegistering}
 	m.verifyCodeCh = make(chan string, 1)
@@ -237,7 +237,7 @@ func TestWechatSubmitVerifyCodeRacingFailureNoPanic(t *testing.T) {
 // cancelled (a disconnect) — otherwise the registration goroutine holds
 // the flock for the full verifyCodeTimeout and reconnects keep failing.
 func TestWechatWaitVerifyCodeCancels(t *testing.T) {
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	m.mu.Lock()
 	m.status = clirest.WechatStatus{Phase: clirest.WechatRegistering}
 	m.verifyCodeCh = make(chan string)
@@ -263,7 +263,7 @@ func TestWechatWaitVerifyCodeCancels(t *testing.T) {
 
 // A pairing code submitted to an in-flight registration is delivered.
 func TestWechatSubmitVerifyCodeDelivered(t *testing.T) {
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	m.mu.Lock()
 	m.status = clirest.WechatStatus{Phase: clirest.WechatRegistering}
 	m.verifyCodeCh = make(chan string, 1)
@@ -368,7 +368,7 @@ func TestEnsureChannelMeta(t *testing.T) {
 // A disconnect whose flow is stuck must return within disconnectTimeout
 // instead of hanging the endpoint.
 func TestWechatDisconnectTimesOutOnStuckFlow(t *testing.T) {
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	cancelled := make(chan struct{})
 	m.mu.Lock()
 	m.cancel = func() { close(cancelled) }
@@ -393,7 +393,7 @@ func TestWechatDisconnectTimesOutOnStuckFlow(t *testing.T) {
 // setStatus guards: a stale flow's publish is dropped, the current
 // owner's goes through.
 func TestWechatSetStatusGuardDropsStalePublish(t *testing.T) {
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	current := make(chan struct{})
 	m.mu.Lock()
 	m.done = current
@@ -413,7 +413,7 @@ func TestWechatSetStatusGuardDropsStalePublish(t *testing.T) {
 // A flow's own terminal publish must not be dropped by its cleanup
 // (publish-first ordering).
 func TestWechatFlowTerminalPublishSurvivesOwnCleanup(t *testing.T) {
-	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Profiles: filepath.Join(t.TempDir(), "profile"), Deps: kernel.Deps{}}, nil)
+	m := NewWechatManager(ChannelEnv{Ctx: context.Background(), Deps: kernel.Deps{}}, nil)
 	done := make(chan struct{})
 	m.mu.Lock()
 	m.done = done

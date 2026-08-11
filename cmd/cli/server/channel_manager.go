@@ -32,13 +32,12 @@ import (
 // (the serve process ctx), NEVER on an HTTP request context — the
 // frontend only triggers and observes (status + SSE events); closing a
 // page or a handler returning never affects it. The machine-level flock
-// guarantees a single live connection per profile — a second instance
+// guarantees a single live connection per config dir — a second instance
 // fails fast instead of silently stealing events from the first.
 var _ clirest.FeishuChannel = (*FeishuManager)(nil)
 
 type FeishuManager struct {
 	baseCtx     context.Context
-	profiles    string
 	cfg         *agent.Agent
 	deps        kernel.Deps
 	feishuCfg   *config.FeishuConfig // settings.json channels.feishu (may be nil)
@@ -69,7 +68,6 @@ type FeishuManager struct {
 func NewFeishuManager(env ChannelEnv, feishuCfg *config.FeishuConfig) *FeishuManager {
 	return &FeishuManager{
 		baseCtx:     env.Ctx,
-		profiles:    env.Profiles,
 		feishuCfg:   feishuCfg,
 		cfg:         env.Cfg,
 		deps:        env.Deps,
@@ -158,7 +156,7 @@ func (m *FeishuManager) ConnectAsync(onQR func(url string, expireIn int)) (bool,
 	// disconnect that abandoned a stuck goroutine leaves the flock held
 	// for a moment — the frontend reconnects immediately after, and the
 	// retry absorbs that handoff (see AcquireChannelLockRetry).
-	lock, err := AcquireChannelLockRetry(m.profiles, "feishu", lockRetryWindow)
+	lock, err := AcquireChannelLockRetry("feishu", lockRetryWindow)
 	if err != nil {
 		return false, err
 	}
@@ -188,10 +186,10 @@ func (m *FeishuManager) ConnectAsync(onQR func(url string, expireIn int)) (bool,
 	m.mu.Unlock()
 	go func() {
 		defer close(regDone)
-		reg, rerr := ResolveFeishuCredentials(regCtx, m.profiles, onQR)
+		reg, rerr := ResolveFeishuCredentials(regCtx, onQR)
 		if rerr != nil {
 			lock.Release()
-			clearFeishuQR(m.profiles)
+			clearFeishuQR()
 			m.mu.Lock()
 			// A disconnect cancels the registration context; the SDK then
 			// returns whatever error the cancellation produced (context
@@ -243,7 +241,7 @@ func (m *FeishuManager) ConnectAsync(onQR func(url string, expireIn int)) (bool,
 		// its field replacement — a Disconnect that landed while the user
 		// scanned (the SDK registration cannot always be aborted
 		// mid-flight) is seen there, and no auto-connect happens.
-		clearFeishuQR(m.profiles)
+		clearFeishuQR()
 		m.startConnection(lock, reg)
 	}()
 	return true, nil
@@ -339,12 +337,12 @@ func (m *FeishuManager) startConnection(lock *ChannelLock, creds FeishuCredentia
 
 // QR returns the cached registration QR (URL + base64 PNG image) and its
 // remaining lifetime in seconds (0 when expired or none in flight). The
-// cache lives on disk under the profile's channel dir so the frontend can
+// cache lives on disk under config.Dir()/channel/<name>/ so the frontend can
 // re-fetch it after a refresh; the remaining time is computed from the
 // cached absolute expiry, so a refresh restarts the countdown from where
 // it actually is — not from the original total.
 func (m *FeishuManager) QR() (url, imgBase64 string, expireIn int) {
-	url, imgBase64, expiresAt := loadFeishuQR(m.profiles)
+	url, imgBase64, expiresAt := loadFeishuQR()
 	if expiresAt <= 0 {
 		return url, imgBase64, 0
 	}
@@ -506,7 +504,7 @@ func (m *FeishuManager) SetCredentials(appID, appSecret string) error {
 	// restart. The "interface is configuration" semantics: submissions
 	// from the control panel are user-level config, so settings (the
 	// highest-priority source) is where they live; QR-registration
-	// artifacts stay in the profile credential file.
+	// artifacts stay in the settings credential file.
 	if err := saveFeishuToSettings(appID, appSecret); err != nil {
 		return err
 	}

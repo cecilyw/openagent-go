@@ -50,8 +50,7 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 		defer mcpCleanup()
 	}
 
-	profilesDir := resolveProfilesDir(cfg.Profiles)
-	ms, knowledge, store, cleanup, err := buildMemory(profilesDir, cfg.Embedding, caps.OnEmbedder())
+	ms, knowledge, store, cleanup, err := buildMemory(cfg.Embedding, caps.OnEmbedder())
 	if err != nil {
 		return err
 	}
@@ -59,7 +58,7 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 
 	opts := []agent.Option{
 		agent.WithModel(m),
-		agent.WithSystemPrompts(resolveProfiles(cfg.Profiles, "")...),
+		agent.WithSystemPrompts(resolveProfiles("")...),
 		agent.WithMaxTurns(100),
 	}
 	opts, skillProvider := buildOpts(opts, caps, m)
@@ -110,7 +109,7 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 	// Plugin manager — loads agent:tools and agent:observers plugins.
 	// Scheduled jobs declared by plugins fire on a process-local scheduler
 	// that lives for the server's lifetime.
-	pluginDir := filepath.Join(profilesDir, "plugins")
+	pluginDir := resolvePluginsDir()
 	sch := scheduler.New()
 	go sch.Run(ctx)
 	mgr := wasm.NewManager(pluginDir).
@@ -128,7 +127,6 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 	// and trigger connect/registration on demand.
 	feishuMgr, wechatMgr, wecomMgr, err := RunChannels(ChannelEnv{
 		Ctx:         ctx,
-		Profiles:    cfg.Profiles,
 		Cfg:         agentCfg,
 		Deps:        deps,
 		DefaultMode: cfg.DefaultMode,

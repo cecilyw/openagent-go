@@ -436,6 +436,14 @@ func loadPlugins(ctx context.Context, pluginPaths []string, settings []byte, hub
 				continue
 			}
 
+			// The plugins dir is shared with agent plugins (agent:tools,
+			// agent:observers) — skip them quietly, they are loaded by the
+			// serve-side agent loader. Only cli:* types are ours.
+			if !isCLIPlugin(meta.Type) {
+				slog.Debug("plugin: skipping non-cli plugin", "name", meta.Name, "type", meta.Type)
+				continue
+			}
+
 			log.Printf("plugin: loaded %s (%s) type=%s", meta.Name, meta.Description, meta.Type)
 
 			if meta.Is("settings") {
@@ -518,4 +526,17 @@ func init() {
 	// Persistent so it works on every subcommand; applied manually in
 	// main() because plugin loading happens before cobra's Execute.
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "suppress all log output")
+}
+
+// isCLIPlugin reports whether a plugin's comma-separated type list
+// contains any cli:* entry (this loader's namespace). Agent plugins
+// (agent:tools, agent:observers) live in the same directory and are
+// loaded by the serve-side agent loader.
+func isCLIPlugin(pluginType string) bool {
+	for _, part := range strings.Split(pluginType, ",") {
+		if strings.HasPrefix(strings.TrimSpace(part), "cli:") {
+			return true
+		}
+	}
+	return false
 }

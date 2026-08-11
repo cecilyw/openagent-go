@@ -41,7 +41,6 @@ var _ clirest.WecomChannel = (*WecomManager)(nil)
 
 type WecomManager struct {
 	baseCtx   context.Context
-	profiles  string
 	cfg       *agent.Agent
 	deps      kernel.Deps
 	wecomCfg  *config.WecomConfig // settings.json channels.wecom (may be nil)
@@ -64,7 +63,6 @@ type WecomManager struct {
 func NewWecomManager(env ChannelEnv, wecomCfg *config.WecomConfig) *WecomManager {
 	return &WecomManager{
 		baseCtx:   env.Ctx,
-		profiles:  env.Profiles,
 		wecomCfg:  wecomCfg,
 		cfg:       env.Cfg,
 		deps:      env.Deps,
@@ -134,7 +132,7 @@ func (m *WecomManager) ConnectAsync(onQR func(url string, expireIn int)) (bool, 
 		return false, nil // authorization/connection already in flight (idempotent)
 	}
 
-	lock, err := AcquireChannelLockRetry(m.profiles, "wecom", lockRetryWindow)
+	lock, err := AcquireChannelLockRetry("wecom", lockRetryWindow)
 	if err != nil {
 		return false, err
 	}
@@ -161,10 +159,10 @@ func (m *WecomManager) ConnectAsync(onQR func(url string, expireIn int)) (bool, 
 	m.mu.Unlock()
 	go func() {
 		defer close(regDone)
-		creds, rerr := ResolveWecomCredentials(regCtx, m.profiles, onQR)
+		creds, rerr := ResolveWecomCredentials(regCtx, onQR)
 		if rerr != nil {
 			lock.Release()
-			clearWecomQR(m.profiles)
+			clearWecomQR()
 			m.mu.Lock()
 			disconnecting := m.stopping
 			m.mu.Unlock()
@@ -194,7 +192,7 @@ func (m *WecomManager) ConnectAsync(onQR func(url string, expireIn int)) (bool, 
 			lock.Release()
 			return
 		}
-		clearWecomQR(m.profiles)
+		clearWecomQR()
 		m.startConnection(lock, wecomConfigFromSettings(m.wecomCfg))
 	}()
 	return true, nil
@@ -264,7 +262,7 @@ func (m *WecomManager) startConnection(lock *ChannelLock, creds *wecom.BotCreds)
 // QR returns the cached authorization QR (URL + base64 PNG image) and
 // its remaining lifetime in seconds (0 when expired or none in flight).
 func (m *WecomManager) QR() (url, imgBase64 string, expireIn int) {
-	url, imgBase64, expiresAt := loadWecomQR(m.profiles)
+	url, imgBase64, expiresAt := loadWecomQR()
 	if expiresAt <= 0 {
 		return url, imgBase64, 0
 	}

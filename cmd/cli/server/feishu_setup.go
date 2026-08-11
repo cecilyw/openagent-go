@@ -30,14 +30,14 @@ type FeishuCredentials struct {
 // onQR, when non-nil, receives the registration QR info (an API-driven
 // caller renders it for the user instead of the terminal); when nil the
 // QR is printed to stderr.
-func ResolveFeishuCredentials(ctx context.Context, profiles string, onQR func(url string, expireIn int)) (FeishuCredentials, error) {
+func ResolveFeishuCredentials(ctx context.Context, onQR func(url string, expireIn int)) (FeishuCredentials, error) {
 	fmt.Fprintln(os.Stderr, "feishu: no credentials found. Starting one-click app registration...")
-	return registerFeishuApp(ctx, profiles, onQR)
+	return registerFeishuApp(ctx, onQR)
 }
 
 // ── QR cache ──
 
-// feishuQRPath returns the QR cache paths under the profile's channel
+// feishuQRPath returns the QR cache paths under config.Dir()/channel/feishu
 // directory: the registration URL, the QR image as base64-encoded PNG,
 // and the absolute expiry timestamp (Unix seconds). Cached so the
 // frontend can re-fetch the QR after a refresh — the connect endpoint is
@@ -45,16 +45,16 @@ func ResolveFeishuCredentials(ctx context.Context, profiles string, onQR func(ur
 // can restart its countdown from the remaining lifetime (expires_at
 // instead of a total expireIn, which would be meaningless after a
 // refresh).
-func feishuQRPath(profiles string) (urlPath, imgPath, expiresAtPath string) {
-	dir := filepath.Join(resolveProfilesDir(profiles), "channel", "feishu")
+func feishuQRPath() (urlPath, imgPath, expiresAtPath string) {
+	dir := channelDir("feishu")
 	return filepath.Join(dir, "qr_url"), filepath.Join(dir, "qr_img_base64"), filepath.Join(dir, "qr_expires_at")
 }
 
 // saveFeishuQR persists the registration QR (URL + base64 PNG image) and
 // its expiry. Best-effort cache: a failed write only costs a
 // re-registration.
-func saveFeishuQR(profiles, url string, expireIn int) error {
-	urlPath, imgPath, expiresAtPath := feishuQRPath(profiles)
+func saveFeishuQR(url string, expireIn int) error {
+	urlPath, imgPath, expiresAtPath := feishuQRPath()
 	if err := os.MkdirAll(filepath.Dir(urlPath), 0o755); err != nil {
 		return err
 	}
@@ -75,8 +75,8 @@ func saveFeishuQR(profiles, url string, expireIn int) error {
 
 // loadFeishuQR reads the cached registration QR (empty strings and a zero
 // expiry when none).
-func loadFeishuQR(profiles string) (url, imgBase64 string, expiresAt int64) {
-	urlPath, imgPath, expiresAtPath := feishuQRPath(profiles)
+func loadFeishuQR() (url, imgBase64 string, expiresAt int64) {
+	urlPath, imgPath, expiresAtPath := feishuQRPath()
 	if b, err := os.ReadFile(urlPath); err == nil {
 		url = string(b)
 	}
@@ -90,8 +90,8 @@ func loadFeishuQR(profiles string) (url, imgBase64 string, expiresAt int64) {
 }
 
 // clearFeishuQR removes the QR cache (registration finished, expired).
-func clearFeishuQR(profiles string) {
-	urlPath, imgPath, expiresAtPath := feishuQRPath(profiles)
+func clearFeishuQR() {
+	urlPath, imgPath, expiresAtPath := feishuQRPath()
 	os.Remove(urlPath)
 	os.Remove(imgPath)
 	os.Remove(expiresAtPath)
@@ -127,7 +127,7 @@ func saveFeishuToSettings(appID, appSecret string) error {
 
 // ── Registration flow ──
 
-func registerFeishuApp(ctx context.Context, profiles string, onQR func(url string, expireIn int)) (FeishuCredentials, error) {
+func registerFeishuApp(ctx context.Context, onQR func(url string, expireIn int)) (FeishuCredentials, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
@@ -156,7 +156,7 @@ func registerFeishuApp(ctx context.Context, profiles string, onQR func(url strin
 			// Cache the QR (URL + base64 PNG) so the frontend can
 			// re-fetch it after a refresh — the connect endpoint is
 			// idempotent while registering and does not re-issue it.
-			if err := saveFeishuQR(profiles, info.URL, info.ExpireIn); err != nil {
+			if err := saveFeishuQR(info.URL, info.ExpireIn); err != nil {
 				fmt.Fprintf(os.Stderr, "feishu: failed to cache QR: %v\n", err)
 			}
 			if onQR != nil {
