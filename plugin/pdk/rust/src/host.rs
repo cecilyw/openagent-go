@@ -27,6 +27,8 @@ mod ffi {
         pub fn fs_read(path_p: u32, path_l: u32) -> u64;
         pub fn fs_write(path_p: u32, path_l: u32, data_p: u32, data_l: u32) -> u64;
         pub fn fs_readdir(path_p: u32, path_l: u32) -> u64;
+        pub fn file_md5(path_p: u32, path_l: u32) -> u64;
+        pub fn directory_md5(path_p: u32, path_l: u32) -> u64;
         pub fn log_info(msg_p: u32, msg_l: u32);
         pub fn log_warn(msg_p: u32, msg_l: u32);
         pub fn log_error(msg_p: u32, msg_l: u32);
@@ -82,8 +84,11 @@ pub fn keyring_delete(service: &str, key: &str) -> Result<(), String> {
 /// path, and `args` is argv after the program — no shell syntax.
 ///
 /// `env` overlays variables on the host process environment (inherited
-/// unless overridden). `timeout_ms` defaults to 120_000 and is clamped
-/// by the host to 10 minutes. `cwd` defaults to the host process cwd.
+/// unless overridden). When `env_replace` is true, `env` is the *complete*
+/// environment — the host process environment is NOT merged, so host
+/// secrets (API keys, tokens) do not leak to the child. `timeout_ms`
+/// defaults to 120_000 and is clamped by the host to 10 minutes. `cwd`
+/// defaults to the host process cwd.
 ///
 /// A non-zero `exit_code` is a business result, NOT an error — the
 /// error string is set only when the command could not run at all,
@@ -93,6 +98,7 @@ pub fn exec_command(
     args: &[&str],
     cwd: Option<&str>,
     env: Option<&alloc::collections::BTreeMap<String, String>>,
+    env_replace: bool,
     timeout_ms: Option<u64>,
 ) -> Result<ExecResult, String> {
     let payload = serde_json::json!({
@@ -100,6 +106,7 @@ pub fn exec_command(
         "args": args,
         "cwd": cwd,
         "env": env,
+        "env_replace": env_replace,
         "timeout_ms": timeout_ms,
     });
     let s = serde_json::to_string(&payload)
@@ -189,6 +196,18 @@ pub fn fs_readdir(path: &str) -> Result<alloc::vec::Vec<DirEntry>, String> {
     let packed = unsafe { ffi::fs_readdir(path.as_ptr() as u32, path.len() as u32) };
     let r: FsReaddirResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(r.entries) }
+}
+
+pub fn file_md5(path: &str) -> Result<String, String> {
+    let packed = unsafe { ffi::file_md5(path.as_ptr() as u32, path.len() as u32) };
+    let r: FileMd5Result = parse_host(packed);
+    if !r.error.is_empty() { Err(r.error) } else { Ok(r.md5) }
+}
+
+pub fn directory_md5(path: &str) -> Result<String, String> {
+    let packed = unsafe { ffi::directory_md5(path.as_ptr() as u32, path.len() as u32) };
+    let r: DirectoryMd5Result = parse_host(packed);
+    if !r.error.is_empty() { Err(r.error) } else { Ok(r.md5) }
 }
 
 // ── Logging ──

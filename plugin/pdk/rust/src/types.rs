@@ -60,6 +60,24 @@ pub struct FsReaddirResult {
     pub error: String,
 }
 
+/// Returned by host::file_md5.
+#[derive(Deserialize, Serialize, Default)]
+pub struct FileMd5Result {
+    #[serde(default)]
+    pub md5: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+/// Returned by host::directory_md5.
+#[derive(Deserialize, Serialize, Default)]
+pub struct DirectoryMd5Result {
+    #[serde(default)]
+    pub md5: String,
+    #[serde(default)]
+    pub error: String,
+}
+
 /// A single entry returned by host::env_list.
 #[derive(Deserialize, Serialize)]
 pub struct EnvEntry {

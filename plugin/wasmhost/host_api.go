@@ -46,6 +46,8 @@ type FS interface {
 	ReadFile(path string) ([]byte, error)
 	WriteFile(path string, data []byte) error
 	ReadDir(path string) ([]os.DirEntry, error)
+	FileMD5(path string) (string, error)
+	DirectoryMD5(path string) (string, error)
 }
 
 // Executor abstracts command execution for WASM plugins. The default
@@ -67,6 +69,11 @@ type ExecRequest struct {
 	// Env overrides/adds environment variables (inherited from the host
 	// process environment). Empty/nil = pure inheritance.
 	Env map[string]string
+	// EnvReplace, when true, makes Env the *complete* environment for the
+	// child process — os.Environ() is NOT merged in. This is the correct
+	// mode for passing a minimal allowlist that excludes host secrets
+	// (API keys, tokens). When false (default), Env overlays os.Environ().
+	EnvReplace bool
 	// TimeoutMS bounds the invocation; 0 = default (ExecDefaultTimeout).
 	// Values above ExecMaxTimeout are clamped.
 	TimeoutMS int

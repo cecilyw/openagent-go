@@ -189,6 +189,10 @@ func compileRoute(r Route) (*httpRoute, error) {
 
 // match checks a request path against the template, returning the
 // extracted params when it matches.
+//
+// A {param} segment rejects an empty value: "/skills/" must not match
+// "/skills/{name}" with name="". Without this guard, a trailing slash
+// would route a list request to the detail handler with an empty name.
 func (rt *httpRoute) match(method, path string) (map[string]string, bool) {
 	if rt.method != method {
 		return nil, false
@@ -200,6 +204,10 @@ func (rt *httpRoute) match(method, path string) (map[string]string, bool) {
 	var params map[string]string
 	for i, seg := range parts {
 		if rt.params[i] != "" {
+			// A param segment must capture a non-empty value.
+			if seg == "" {
+				return nil, false
+			}
 			if params == nil {
 				params = make(map[string]string)
 			}
