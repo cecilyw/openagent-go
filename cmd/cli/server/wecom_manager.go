@@ -14,6 +14,7 @@ import (
 	"github.com/yusheng-g/openagent-go/channel"
 	"github.com/yusheng-g/openagent-go/channel/wecom"
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
+	"github.com/yusheng-g/openagent-go/governance"
 	"github.com/yusheng-g/openagent-go/kernel"
 	"github.com/yusheng-g/openagent-go/session"
 	opentool "github.com/yusheng-g/openagent-go/tool"
@@ -230,6 +231,10 @@ func (m *WecomManager) startConnection(lock *ChannelLock, creds *wecom.BotCreds)
 		if m.workDir != "" {
 			deps.Tools = append(deps.Tools, wecom.NewSendFile(ch, m.workDir))
 		}
+		mem := governance.NewSessionApprovalMemory()
+		deps.HumanApprover = ch.Approver(mem)
+		deps.ApprovalMemory = mem
+		slog.Info("channel approver enabled", "channel", "wecom")
 
 		everReady := false
 		ch.SetOnReady(func() {
@@ -246,7 +251,7 @@ func (m *WecomManager) startConnection(lock *ChannelLock, creds *wecom.BotCreds)
 				m.setStatus(clirest.WecomStatus{Phase: clirest.WecomDisconnected, BotID: creds.BotID, LastError: err.Error()}, connDone)
 			}
 		})
-		err := ch.Start(connCtx, wecomMessageHandler(m.cfg, deps, m.metaStore))
+		err := ch.Start(connCtx, wecomMessageHandler(m.cfg, deps, m.metaStore, ch))
 		lock.Release()
 		// Publish before the cleanup (guard semantics — see FeishuManager).
 		m.setStatus(clirest.WecomStatus{Phase: clirest.WecomDisconnected, BotID: creds.BotID, LastError: errString(err)}, connDone)
@@ -365,7 +370,7 @@ func (m *WecomManager) SetCredentials(botID, secret string) error {
 // grows in place (finish=false refreshes → finish=true ends), throttled
 // to ~1 refresh/second so the user sees the answer build up without
 // spamming. req_id is echoed verbatim (the reply func captures it).
-func wecomMessageHandler(cfg *agent.Agent, deps kernel.Deps, metaStore session.Store) channel.MessageHandler {
+func wecomMessageHandler(cfg *agent.Agent, deps kernel.Deps, metaStore session.Store, ch *wecom.Channel) channel.MessageHandler {
 	return func(msgCtx context.Context, msg channel.IncomingMessage, reply channel.ReplyFunc) {
 		sessionID := "wecom_" + msg.ChatID
 		ensureChannelMeta(metaStore, sessionID, "wecom", msg.Text)
@@ -383,10 +388,10 @@ func wecomMessageHandler(cfg *agent.Agent, deps kernel.Deps, metaStore session.S
 				CreatedAt: time.Now(),
 				Metadata:  wecom.ReceiveMetadata(msg),
 			}
-			stream := kernel.New(cfg, deps).RunStream(msgCtx, session, openagent.UserMessage(msg.Text))
 
 			var b strings.Builder
 			var streamID string
+			var lastDisplay string
 			sentLen := 0
 			lastFlush := time.Now()
 			hasText := false
@@ -401,14 +406,27 @@ func wecomMessageHandler(cfg *agent.Agent, deps kernel.Deps, metaStore session.S
 				} else {
 					_, _ = reply(msgCtx, channel.ReplyMessage{UpdateID: streamID, Text: text})
 				}
+				lastDisplay = text
 				sentLen = b.Len()
 				lastFlush = time.Now()
 			}
 
-			// Thinking placeholder — gives immediate feedback before the
-			// LLM produces its first token (typically 1-2s).
-			streamID, _ = reply(msgCtx, channel.ReplyMessage{Text: "🤔 思考中..."})
-			lastFlush = time.Now()
+			// Register a pre-approval hook: when the approver is about
+			// to send the approval card, finish the current streaming
+			// reply first. WeCom rejects aibot_send_msg while a stream
+			// is open (errcode 6000). After the hook fires, streamID
+			// is cleared so the next flush starts a fresh stream.
+			ch.SetPreApprovalHook(func() {
+				if streamID != "" {
+					_, _ = reply(msgCtx, channel.ReplyMessage{UpdateID: wecom.FinishMarker, Text: lastDisplay})
+					streamID = ""
+					sentLen = 0
+					hasText = false
+					b.Reset()
+				}
+			})
+
+			stream := kernel.New(cfg, deps).RunStream(msgCtx, session, openagent.UserMessage(msg.Text))
 
 			for evt := range stream {
 				switch evt.Type {
@@ -431,6 +449,7 @@ func wecomMessageHandler(cfg *agent.Agent, deps kernel.Deps, metaStore session.S
 							display += "\n\n" + hint + "..."
 						}
 						_, _ = reply(msgCtx, channel.ReplyMessage{UpdateID: streamID, Text: display})
+						lastDisplay = display
 						lastFlush = time.Now()
 					}
 				case openagent.StreamError:
