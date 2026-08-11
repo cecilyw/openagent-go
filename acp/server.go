@@ -378,6 +378,15 @@ func (ss *agentSession) SetPlanEntries(entries []plan.Entry) []plan.Entry {
 func (ss *agentSession) ApplyPlanUpdates(updates []plan.Update, underLock func(snap []plan.Entry)) ([]plan.Entry, error) {
 	ss.modeMu.Lock()
 	defer ss.modeMu.Unlock()
+	if len(ss.planEntries) == 0 {
+		// The actionable exit depends on the mode: plan mode can create a
+		// plan or leave; auto/manual cannot create (plan_create is
+		// plan-only) — enter_plan_mode is the way in.
+		if ss.mode == "plan" {
+			return nil, fmt.Errorf("plan_update: there is no plan in the current session — create one with plan_create, or call exit_plan_mode to leave plan mode")
+		}
+		return nil, fmt.Errorf("plan_update: there is no plan in the current session — call enter_plan_mode to plan it first")
+	}
 	idxByID := make(map[string]int, len(ss.planEntries))
 	for i, e := range ss.planEntries {
 		idxByID[e.ID] = i
@@ -1898,10 +1907,17 @@ func (s *AgentServer) applyModeTools(sid openacp.SessionId, ss *agentSession, rt
 		// read_client_file, so the model can inspect the workspace while
 		// planning. No execution tools, no approver (no side effects to
 		// approve), no delegation.
+		//
+		// Non-read-only tools are NOT dropped: they are replaced by
+		// stubs that explain the situation. A dropped tool surfaces as a
+		// bare `tool "shell" not found`, which leaves the model guessing
+		// why shell vanished; the stub tells it to exit plan mode.
 		if s.ToolFactory != nil && ss.cwd != "" {
 			for _, t := range s.ToolFactory(ss.cwd) {
 				if readOnlyToolNames[t.Definition().Name] {
 					add = append(add, t)
+				} else {
+					add = append(add, planModeStub{def: t.Definition()})
 				}
 			}
 		}
@@ -1961,10 +1977,14 @@ func (s *AgentServer) reconcilePlanTools(ctx context.Context, sid openacp.Sessio
 	rt.RemoveTools("plan_create", "plan_update", "enter_plan_mode", "exit_plan_mode")
 
 	// plan_update is always registered so it can track plan progress in
-	// all modes (plan/auto/manual). ApplyPlanUpdates validates-then-mutates
-	// under modeMu and runs the notification in the same critical section,
-	// so the notified snapshot is consistent with the mutation and ordered
-	// relative to a concurrent exit_plan_mode's empty-plan notification.
+	// all modes (plan/auto/manual) — including the same prompt that just
+	// ran plan_create (reconcile runs once per OnPrompt, not per turn).
+	// ApplyPlanUpdates validates-then-mutates under modeMu and runs the
+	// notification in the same critical section, so the notified snapshot
+	// is consistent with the mutation and ordered relative to a concurrent
+	// exit_plan_mode's empty-plan notification. A call with no plan yet
+	// gets an actionable error ("create one first"), never a confusing
+	// "unknown step id".
 	pu := plan.NewUpdateTool(func(updates []plan.Update) ([]plan.Entry, error) {
 		snap, err := ss.ApplyPlanUpdates(updates, func(snap []plan.Entry) {
 			// Called with modeMu held (ApplyPlanUpdates) — read the field
@@ -2441,4 +2461,28 @@ func finishReasonToACP(finishReason string) openacp.StopReason {
 		// Unknown finish reason — log but don't block.
 		return openacp.StopReasonEndTurn
 	}
+}
+
+// planModeStub replaces an execution tool while the session is in plan
+// mode. The tool keeps its name (the model may still reference it) but
+// every call returns an actionable error: the model is in plan mode and
+// must call exit_plan_mode to regain execution tools.
+// planModeStub replaces an execution tool while the session is in plan
+// mode. The DEFINITION is the original tool's — the model sees shell/
+// write/... exactly as in normal mode, with the same name, description,
+// and parameter schema. Only the execution result changes: every call
+// returns an actionable error telling the model to exit plan mode.
+type planModeStub struct {
+	def openagent.FunctionDefinition
+}
+
+
+func (p planModeStub) Definition() openagent.FunctionDefinition {
+	return p.def
+}
+
+func (p planModeStub) Execute(_ context.Context, _ json.RawMessage) *openagent.ToolResult {
+	return openagent.ErrorResult(fmt.Errorf(
+		"%s is unavailable in plan mode — you have no execution tools. "+
+			"Call exit_plan_mode to leave plan mode and regain execution tools", p.def.Name), false, "")
 }

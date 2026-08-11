@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"strings"
 	"testing"
 
 	openagent "github.com/yusheng-g/openagent-go"
@@ -444,3 +445,31 @@ func (m *capturingModel) ContextWindow() int { return m.inner.ContextWindow() }
 // keep the plan package referenced (the production code wires plan.NewCreateTool
 // etc.; these tests rely on plan tools being offered by OnPrompt).
 var _ = plan.StatusPending
+
+// TestApplyPlanUpdatesNoPlan: plan_update without a plan must return an
+// actionable error ("create one first"), not the confusing "unknown
+// step id" — a model that sees plan_update in a session that never ran
+// plan_create would otherwise retry forever against an empty plan.
+func TestApplyPlanUpdatesNoPlan(t *testing.T) {
+	ss := &agentSession{}
+	_, err := ss.ApplyPlanUpdates([]plan.Update{{ID: "1", Status: "in_progress"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "no plan in the current session") {
+		t.Fatalf("err = %v, want no-plan-yet error", err)
+	}
+}
+
+// TestApplyPlanUpdatesNoPlanModes: the actionable exit in the error
+// depends on the mode — plan mode can create or exit; auto/manual must
+// enter_plan_mode first (plan_create/exit_plan_mode are plan-only).
+func TestApplyPlanUpdatesNoPlanModes(t *testing.T) {
+	planSess := &agentSession{mode: "plan"}
+	_, err := planSess.ApplyPlanUpdates([]plan.Update{{ID: "1", Status: "in_progress"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "exit_plan_mode") {
+		t.Fatalf("plan-mode err = %v, want exit_plan_mode hint", err)
+	}
+	autoSess := &agentSession{mode: "auto"}
+	_, err = autoSess.ApplyPlanUpdates([]plan.Update{{ID: "1", Status: "in_progress"}}, nil)
+	if err == nil || strings.Contains(err.Error(), "exit_plan_mode") || !strings.Contains(err.Error(), "enter_plan_mode") {
+		t.Fatalf("auto-mode err = %v, want enter_plan_mode hint, no exit_plan_mode", err)
+	}
+}
