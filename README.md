@@ -56,11 +56,10 @@ Create `~/.openagent/settings.json`:
       "models": ["gpt-4o"]
     }
   },
-  "profiles": ".openagent/profile"
 }
 ```
 
-Put `AGENTS.md` and `SOUL.md` in `~/.openagent/profile/` or `$(pwd)/.openagent/profile/` to customise the agent's behaviour.
+Put `AGENTS.md` and `SOUL.md` in the profile directory (default `~/.openagent/profile/`; when `OPENAGENT_CLI_CONFIG` points settings elsewhere, `<config-dir>/profile/` next to it) to customise the agent's behaviour. Project-level `$(pwd)/AGENTS.md` overrides it.
 
 Connect an ACP client (VSCode/Zed plugin).
 
@@ -155,7 +154,7 @@ The Feishu connection is a **process-level daemon** — the frontend only trigge
 
 Configuration is separate from the connection: `PUT /api/settings/channels/feishu` only saves (persisted to settings.json `channels.feishu`, applied to the running server's in-memory config); applying the new values is the frontend's explicit two-step — `POST /disconnect` + `POST /connect` (a connect after disconnect cannot short-circuit on a stale "connected"). settings.json is the single credential source: manual config, frontend submissions, and QR-registration artifacts all land there. Frontend flow: load → `GET status` → show state → "Connect" button (QR registration), the config form (`GET/PUT/DELETE /api/settings/channels/feishu`), or "re-register" (DELETE + connect) when credentials failed → poll `status` until `connected`.
 
-**Single instance per profile:** one Feishu app = one active WebSocket. The server holds a machine-level lock (`$profile/channel/feishu/feishu.lock`) for the whole connection lifetime — a second `--channel feishu` instance fails fast instead of silently stealing events. The lock is released automatically by the kernel if the process dies. For production, run under systemd/Docker so the process (and its connection) is supervised.
+**Single instance per config dir:** one Feishu app = one active WebSocket. The server holds a machine-level lock (`<config-dir>/channel/feishu/feishu.lock`) for the whole connection lifetime — a second `--channel feishu` instance fails fast instead of silently stealing events. The lock is released automatically by the kernel if the process dies. For production, run under systemd/Docker so the process (and its connection) is supervised.
 
 **Adding MCP tools (optional):**
 
@@ -264,7 +263,7 @@ A QR code appears — scan it with the WeCom app; the robot is created automatic
 
 **Streaming replies:** the agent's answer is sent as a stream message — `finish=false` refreshes grow the same message until `finish=true` ends it. The session rate limit is 30 messages/minute.
 
-**Connection semantics (all three channels):** settings credentials never auto-connect — the only auto-connect entry points are `--channel <name>` (fail-fast) and the frontend's `POST /connect`. Scanned/configured credentials are reused across restarts; the machine lock (`$profile/channel/<name>/<name>.lock`) keeps one live connection per profile.
+**Connection semantics (all three channels):** settings credentials never auto-connect — the only auto-connect entry points are `--channel <name>` (fail-fast) and the frontend's `POST /connect`. Scanned/configured credentials are reused across restarts; the machine lock (`<config-dir>/channel/<name>/<name>.lock`) keeps one live connection per config dir.
 
 ### OpenViking Integration
 

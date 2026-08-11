@@ -56,11 +56,10 @@ go build -o openagent-cli ./cmd/cli/
       "models": ["gpt-4o"]
     }
   },
-  "profiles": ".openagent/profile"
 }
 ```
 
-将 `AGENTS.md` 和 `SOUL.md` 放在 `~/.openagent/profile/` 或 `$(pwd)/.openagent/profile/` 来自定义 agent 的行为。
+将 `AGENTS.md` 和 `SOUL.md` 放在 profile 目录（默认 `~/.openagent/profile/`；当 `OPENAGENT_CLI_CONFIG` 将 settings 指到别处时为旁边的 `<config-dir>/profile/`）来自定义 agent 的行为。项目级 `$(pwd)/AGENTS.md` 优先覆盖。
 
 连接 ACP 客户端（VSCode/Zed 插件）。
 
@@ -155,7 +154,7 @@ export BOCHA_API_KEY=<你的-key>   # 在 https://open.bochaai.com 获取
 
 **配置与连接分离**：`PUT /api/settings/channels/feishu` 只保存（持久化到 settings.json 的 `channels.feishu`，并更新运行中服务的内存配置）；让新值生效是前端的显式两步——`POST /disconnect` + `POST /connect`（断开后的 connect 不会被"已连接"短路）。settings.json 是唯一凭据源：手写配置、界面提交、扫码注册产物都落在这里。前端流程：加载 → `GET status` → 显示状态 → "连接"按钮（扫码注册）、配置表单（`GET/PUT/DELETE /api/settings/channels/feishu`）、或凭据失败时"重新注册"（DELETE + connect）→ 轮询 `status` 直到 `connected`。
 
-**每个 profile 单实例：** 一个飞书 app = 一个活跃 WebSocket。服务在连接期间持有机器级锁（`$profile/channel/feishu/feishu.lock`）——第二个 `--channel feishu` 实例会快速失败报错，而不是静默抢走事件。进程死亡时锁由内核自动释放。生产部署建议用 systemd/Docker 托管进程（及其连接）。
+**每个配置目录单实例：** 一个飞书 app = 一个活跃 WebSocket。服务在连接期间持有机器级锁（`<config-dir>/channel/feishu/feishu.lock`）——第二个 `--channel feishu` 实例会快速失败报错，而不是静默抢走事件。进程死亡时锁由内核自动释放。生产部署建议用 systemd/Docker 托管进程（及其连接）。
 
 **配置 MCP 工具（可选）：**
 
@@ -264,7 +263,7 @@ Manual 模式下的审批请求直接内嵌在运行卡片中（无独立审批�
 
 **流式回复：** agent 的回答以流式消息发送 —— `finish=false` 刷新让同一条消息逐步增长，`finish=true` 结束。会话限流 30 条/分钟。
 
-**连接语义（三个通道一致）：** settings 中的凭据**不会自动触发连接** —— 唯一的自动连接入口是 `--channel <name>`（快速失败）和前端 `POST /connect`。已扫码/已配置的凭据在重启后复用；机器级锁（`$profile/channel/<name>/<name>.lock`）保证每个 profile 只有一个活跃连接。
+**连接语义（三个通道一致）：** settings 中的凭据**不会自动触发连接** —— 唯一的自动连接入口是 `--channel <name>`（快速失败）和前端 `POST /connect`。已扫码/已配置的凭据在重启后复用；机器级锁（`<config-dir>/channel/<name>/<name>.lock`）保证每个配置目录只有一个活跃连接。
 
 ### OpenViking 集成
 
