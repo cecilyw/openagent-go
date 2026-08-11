@@ -44,12 +44,16 @@ type Channel struct {
 
 	pending   map[string]chan Frame // req_id → response (upload acks)
 	pendingMu sync.Mutex
+
+	approver *wecomApprover
 }
 
 // New returns a WeCom Channel bound to the robot credentials. Must be
 // started via Start().
 func New(botID, secret string) *Channel {
-	return &Channel{botID: botID, secret: secret, pending: make(map[string]chan Frame)}
+	ch := &Channel{botID: botID, secret: secret, pending: make(map[string]chan Frame)}
+	ch.approver = newWecomApprover(ch)
+	return ch
 }
 
 // SetOnReady registers the ready callback (nil clears it). Fired once
@@ -232,10 +236,27 @@ func (c *Channel) handleFrame(raw []byte, handler channel.MessageHandler) error 
 		return nil
 
 	case cmdEventCallback:
-		// v1: acknowledge interaction events (enter_chat etc.) without
-		// acting on them. Acknowledging keeps the server's state clean.
-		slog.Debug("wecom: event callback", "req_id", f.Headers.ReqID, "body", string(f.Body))
-		return c.writeJSON(Frame{Cmd: cmdPong, Headers: FrameHeaders{ReqID: f.Headers.ReqID}})
+		// Always ack with pong first (keeps the server's state clean).
+		_ = c.writeJSON(Frame{Cmd: cmdPong, Headers: FrameHeaders{ReqID: f.Headers.ReqID}})
+
+		var body EventCallbackBody
+		if err := json.Unmarshal(f.Body, &body); err != nil {
+			slog.Warn("wecom: event_callback decode failed", "body", string(f.Body))
+			return nil
+		}
+		if body.Event.EventType == "template_card_event" && body.Event.TemplateCardEvent != nil {
+			ev := body.Event.TemplateCardEvent
+			slog.Info("wecom: template card event",
+				"task_id", ev.TaskID, "event_key", ev.EventKey, "card_type", ev.CardType,
+				"from", body.From.UserID, "req_id", f.Headers.ReqID)
+			if c.approver != nil {
+				// Card update goes via aibot_respond_update_msg (WS).
+				c.approver.handleCardEvent(f.Headers.ReqID, ev)
+			}
+		} else {
+			slog.Debug("wecom: event callback (non-card)", "eventtype", body.Event.EventType, "req_id", f.Headers.ReqID)
+		}
+		return nil
 
 	case cmdPing:
 		// Answer pings immediately (keep-alive from the server side).
@@ -313,7 +334,9 @@ func (c *Channel) buildReply(reqID string, cb *MsgCallbackBody) channel.ReplyFun
 			if err := c.writeJSON(Frame{Cmd: cmdRespondMsg, Headers: FrameHeaders{ReqID: reqID}, Body: mustJSON(body)}); err != nil {
 				return "", err
 			}
-			return streamID, nil
+			finishedID := streamID
+			streamID = "" // reset: next call creates a fresh stream
+			return finishedID, nil
 		}
 		if streamID == "" {
 			streamID = newReqID()
@@ -479,6 +502,35 @@ func (c *Channel) SendMediaMessage(chatID, mediaType, mediaID string) error {
 		return fmt.Errorf("wecom: unknown media type %q", mediaType)
 	}
 	return c.writeJSON(Frame{Cmd: cmdSendMsg, Headers: FrameHeaders{ReqID: newReqID()},
+		Body: mustJSON(body)})
+}
+
+// SendTemplateCard proactively sends a template_card message via
+// aibot_send_msg. Used by the approver to send the approval card.
+// Blocks until the server acks the send — a failure (e.g. duplicate
+// task_id, errcode 42014) is returned so Ask can fail fast instead of
+// blocking forever.
+func (c *Channel) SendTemplateCard(chatID string, cardJSON json.RawMessage) error {
+	body := SendTemplateCardMsgBody{
+		ChatID:       chatID,
+		MsgType:      "template_card",
+		TemplateCard: cardJSON,
+	}
+	_, err := c.sendAndWait(Frame{Cmd: cmdSendMsg, Headers: FrameHeaders{ReqID: newReqID()},
+		Body: mustJSON(body)})
+	return err
+}
+
+// UpdateTemplateCard updates an existing template card via
+// aibot_respond_update_msg. reqID must echo the event callback's
+// req_id. Used by the approver to show the resolved state after a
+// button click.
+func (c *Channel) UpdateTemplateCard(reqID string, cardJSON json.RawMessage) error {
+	body := UpdateTemplateCardBody{
+		ResponseType: "update_template_card",
+		TemplateCard: cardJSON,
+	}
+	return c.writeJSON(Frame{Cmd: cmdRespondUpdateMsg, Headers: FrameHeaders{ReqID: reqID},
 		Body: mustJSON(body)})
 }
 

@@ -145,7 +145,7 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 				// Best-effort: keep the existing working set. The hard
 				// window check below surfaces any overflow (fail-loud).
 			} else {
-				workingMessages = messages
+				workingMessages = ctxpkg.TrimOrphanToolCalls(messages)
 				rt.compressed = ci.compressed
 				if ci.err != nil {
 					slog.Error("openagent: tool-turn compaction failed", "error", ci.err)

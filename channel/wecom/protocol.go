@@ -74,16 +74,30 @@ type TextBody struct {
 // EventCallbackBody is the aibot_event_callback payload (interaction
 // events: enter_chat, template_card clicks, ...).
 type EventCallbackBody struct {
-	MsgID    string   `json:"msgid"`
-	BotID    string   `json:"aibotid"`
-	From     MsgFrom  `json:"from"`
-	MsgType  string   `json:"msgtype"`
-	Event    EventObj `json:"event"`
+	MsgID      string    `json:"msgid"`
+	BotID      string    `json:"aibotid"`
+	ChatID     string    `json:"chatid,omitempty"`
+	ChatType   string    `json:"chattype,omitempty"`
+	CreateTime int64     `json:"create_time,omitempty"`
+	From       MsgFrom   `json:"from"`
+	MsgType    string    `json:"msgtype"`
+	Event      EventObj  `json:"event"`
 }
 
-// EventObj carries the event discriminator.
+// EventObj carries the event discriminator and optional template card
+// event payload.
 type EventObj struct {
-	EventType string `json:"eventtype"`
+	EventType         string               `json:"eventtype"`
+	TemplateCardEvent *TemplateCardEvent   `json:"template_card_event,omitempty"`
+}
+
+// TemplateCardEvent is the payload carried by a template_card_event
+// callback — fired when a user clicks a button on a button_interaction
+// (or vote/multiple_interaction) template card.
+type TemplateCardEvent struct {
+	CardType string `json:"card_type"`
+	EventKey string `json:"event_key"`
+	TaskID   string `json:"task_id"`
 }
 
 // StreamReplyBody is the aibot_respond_msg payload for a streaming text
@@ -164,4 +178,22 @@ type SendMediaMsgBody struct {
 	Image   *MediaContent `json:"image,omitempty"`
 	Voice   *MediaContent `json:"voice,omitempty"`
 	Video   *VideoContent `json:"video,omitempty"`
+}
+
+// SendTemplateCardMsgBody is the aibot_send_msg payload for a
+// template_card message (e.g. button_interaction approval card).
+type SendTemplateCardMsgBody struct {
+	ChatID       string          `json:"chatid"`
+	MsgType      string          `json:"msgtype"`
+	TemplateCard json.RawMessage `json:"template_card"`
+}
+
+// UpdateTemplateCardBody is the aibot_respond_update_msg payload for
+// updating a template card after a user interaction. The req_id of the
+// frame must echo the event callback's req_id. Per the WeCom long-
+// connection docs (path/101463), the body uses response_type (not
+// msgtype) and does NOT carry userids.
+type UpdateTemplateCardBody struct {
+	ResponseType string          `json:"response_type"`
+	TemplateCard json.RawMessage `json:"template_card"`
 }
