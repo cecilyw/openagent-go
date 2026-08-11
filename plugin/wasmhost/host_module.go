@@ -134,6 +134,7 @@ func (h *HostAPI) RegisterHostModule(ctx context.Context, rt wazero.Runtime) err
 				Args      []string          `json:"args"`
 				Cwd       string            `json:"cwd"`
 				Env       map[string]string `json:"env"`
+				EnvReplace bool             `json:"env_replace"`
 				TimeoutMS int               `json:"timeout_ms"`
 			}
 			if err := json.Unmarshal([]byte(raw), &req); err != nil {
@@ -143,19 +144,20 @@ func (h *HostAPI) RegisterHostModule(ctx context.Context, rt wazero.Runtime) err
 				return writeJSON(ctx, mod, map[string]string{"error": "cmd is required"})
 			}
 			res := h.Executor.Exec(ctx, ExecRequest{
-				Cmd:       req.Cmd,
-				Args:      req.Args,
-				Cwd:       req.Cwd,
-				Env:       req.Env,
-				TimeoutMS: req.TimeoutMS,
+				Cmd:        req.Cmd,
+				Args:       req.Args,
+				Cwd:        req.Cwd,
+				Env:        req.Env,
+				EnvReplace: req.EnvReplace,
+				TimeoutMS:  req.TimeoutMS,
 			})
 			// The guest heap bounds every host response (the guest must
 			// allocate the full JSON to deserialize it). An output near
 			// the heap size would make the guest panic on alloc failure
 			// — reject with a specific error instead.
 			if len(res.Stdout)+len(res.Stderr) > maxExecGuestResponse {
-				return writeJSON(ctx, mod, map[string]string{
-					"stdout": "", "stderr": "", "exit_code": "0",
+				return writeJSON(ctx, mod, map[string]any{
+					"stdout": "", "stderr": "", "exit_code": 0,
 					"error": fmt.Sprintf("exec: output too large for guest (%d bytes)", len(res.Stdout)+len(res.Stderr)),
 				})
 			}
@@ -328,6 +330,48 @@ func (h *HostAPI) RegisterHostModule(ctx context.Context, rt wazero.Runtime) err
 			return writeJSON(ctx, mod, map[string]any{"entries": out})
 		}).
 		Export("fs_readdir").
+
+		// ── file_md5 → {"md5": "...", "error": ""} ──
+		// Computes the MD5 of a single file. Reserved for plugins that
+		// need per-file hashing; the skill-manager plugin currently uses
+		// directory_md5 for aggregate change detection.
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module, pathPtr, pathLen uint32) uint64 {
+			if h.denied("file_md5") {
+				return writeJSON(ctx, mod, map[string]string{"error": "export file_md5 disabled"})
+			}
+			if h.FS == nil {
+				return writeJSON(ctx, mod, map[string]string{"error": "filesystem not available"})
+			}
+			path := read(mod, pathPtr, pathLen)
+			md5val, err := h.FS.FileMD5(path)
+			if err != nil {
+				return writeJSON(ctx, mod, map[string]string{"error": err.Error()})
+			}
+			return writeJSON(ctx, mod, map[string]string{"md5": md5val})
+		}).
+		Export("file_md5").
+
+		// ── directory_md5 → {"md5": "...", "error": ""} ──
+		// Computes an aggregate MD5 of a directory (dirname + all files
+		// sorted by relative path). Used by plugins to detect content
+		// changes without downloading the whole tree for comparison.
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module, pathPtr, pathLen uint32) uint64 {
+			if h.denied("directory_md5") {
+				return writeJSON(ctx, mod, map[string]string{"error": "export directory_md5 disabled"})
+			}
+			if h.FS == nil {
+				return writeJSON(ctx, mod, map[string]string{"error": "filesystem not available"})
+			}
+			path := read(mod, pathPtr, pathLen)
+			md5val, err := h.FS.DirectoryMD5(path)
+			if err != nil {
+				return writeJSON(ctx, mod, map[string]string{"error": err.Error()})
+			}
+			return writeJSON(ctx, mod, map[string]string{"md5": md5val})
+		}).
+		Export("directory_md5").
 
 		// ── log_info / log_warn / log_error → void ──
 		NewFunctionBuilder().

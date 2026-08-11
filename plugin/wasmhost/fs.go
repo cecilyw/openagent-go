@@ -1,6 +1,13 @@
 package wasmhost
 
-import "os"
+import (
+	"crypto/md5"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+
+	skillfs "github.com/yusheng-g/openagent-go/skill/fs"
+)
 
 // osFS implements FS over the host filesystem with NO sandbox boundary.
 // The trust model is explicit: whoever can place a .wasm in the plugin
@@ -23,4 +30,17 @@ func (osFS) WriteFile(path string, data []byte) error {
 
 func (osFS) ReadDir(path string) ([]os.DirEntry, error) {
 	return os.ReadDir(path)
+}
+
+func (osFS) FileMD5(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := md5.Sum(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func (osFS) DirectoryMD5(path string) (string, error) {
+	return skillfs.FolderMD5(path, filepath.Base(path))
 }

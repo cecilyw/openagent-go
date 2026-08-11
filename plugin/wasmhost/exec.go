@@ -26,9 +26,10 @@ const ExecMaxTimeout = 10 * time.Minute
 const maxExecOutputBytes = 1 << 20 // 1 MiB each
 
 // maxExecGuestResponse bounds the exec response the host serializes into
-// the guest heap. The guest heap is 4 MiB and the plugin's own
-// allocations share it — a response near 3 MiB would panic the guest on
-// alloc failure, so the host rejects earlier with a specific error.
+// the guest heap. The guest heap is 512 MiB (WithMemoryLimitPages(8192)
+// = 8192 × 64 KiB) and the plugin's own allocations share it — a
+// response near 3 MiB would still be safe, but we reject earlier with a
+// specific error to leave headroom for the plugin's own allocations.
 const maxExecGuestResponse = 3 << 20 // 3 MiB
 
 // stdExecutor implements Executor via os/exec: argv execution with PATH
@@ -57,7 +58,7 @@ func (stdExecutor) Exec(ctx context.Context, req ExecRequest) ExecResult {
 	if req.Cwd != "" {
 		cmd.Dir = req.Cwd
 	}
-	cmd.Env = mergeEnv(os.Environ(), req.Env)
+	cmd.Env = buildEnv(os.Environ(), req.Env, req.EnvReplace)
 	// Run in its own process group so the timeout can kill the whole
 	// group — CommandContext's default Cancel only kills the command
 	// itself, leaving children (e.g. a `sh -c "sleep 100 | grep x"`
@@ -165,11 +166,25 @@ func readCapped(r io.Reader) ([]byte, bool) {
 	return b, false
 }
 
-// mergeEnv overlays overrides onto the process environment: every
-// inherited variable stays unless overridden (Go's exec.Cmd.Env
-// REPLACES the environment when non-nil, so the merge is done here — a
-// plugin adding one variable must not lose PATH/HOME).
-func mergeEnv(base []string, overrides map[string]string) []string {
+// buildEnv constructs the child process environment.
+//
+// When replace is true, overrides is the *complete* environment — the
+// host process environment (base) is NOT merged. This is the correct
+// mode for a minimal allowlist that excludes host secrets (API keys,
+// tokens): the child process sees only what the caller explicitly passes.
+//
+// When replace is false, overrides overlays base: every inherited
+// variable stays unless overridden (Go's exec.Cmd.Env REPLACES the
+// environment when non-nil, so the merge is done here — a plugin adding
+// one variable must not lose PATH/HOME).
+func buildEnv(base []string, overrides map[string]string, replace bool) []string {
+	if replace {
+		out := make([]string, 0, len(overrides))
+		for key, v := range overrides {
+			out = append(out, key+"="+v)
+		}
+		return out
+	}
 	if len(overrides) == 0 {
 		return base
 	}
