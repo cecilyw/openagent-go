@@ -134,8 +134,17 @@ func (m *WechatManager) ConnectAsync(onQR func(url string, expireIn int), onScan
 	phase := m.status.Phase
 	m.mu.Unlock()
 	switch phase {
-	case clirest.WechatRegistering, clirest.WechatConnecting, clirest.WechatConnected:
-		return false, nil // login/connection already in flight (idempotent)
+	case clirest.WechatConnecting, clirest.WechatConnected:
+		return false, nil // connection already in flight (idempotent)
+	case clirest.WechatRegistering:
+		// If the QR cache is still valid, the registration is live — idempotent.
+		_, _, expiresAt := loadWechatQR()
+		if expiresAt > 0 && time.Now().Unix() < expiresAt {
+			return false, nil
+		}
+		// QR cache expired — the old registration is stale (the server
+		// hasn't returned "expired" yet). Cancel it and start fresh.
+		m.Disconnect()
 	}
 
 	// Retry-windowed for the same reason as feishu: a disconnect that

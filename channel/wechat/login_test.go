@@ -166,72 +166,45 @@ func TestLoginVerifyCodeFlow(t *testing.T) {
 	}
 }
 
-func TestLoginExpiredRefreshes(t *testing.T) {
+func TestLoginExpiredAborts(t *testing.T) {
 	old := pollInterval
 	pollInterval = time.Millisecond
 	defer func() { pollInterval = old }()
 
-	// First QR expires, second QR confirms. Two get_bot_qrcode calls.
-	f := newFakeILink("expired", "confirmed")
-	srv := httptest.NewServer(f.handler())
+	// QR expires — login aborts immediately (no refresh).
+	srv := httptest.NewServer(newFakeILink("expired").handler())
 	defer srv.Close()
 
 	expired := 0
-	creds, err := Login(context.Background(), protocol.NewClient(), LoginOptions{
+	_, err := Login(context.Background(), protocol.NewClient(), LoginOptions{
 		BaseURL:   srv.URL,
 		OnQRURL:   func(string) {},
 		OnExpired: func() { expired++ },
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected abort on expired")
 	}
 	if expired != 1 {
-		t.Fatalf("OnExpired fired %d times", expired)
-	}
-	if creds.Token != "tok-1" {
-		t.Fatalf("creds = %+v", creds)
+		t.Fatalf("OnExpired fired %d times, want 1", expired)
 	}
 }
 
-func TestLoginTooManyRefreshes(t *testing.T) {
+func TestLoginVerifyCodeBlockedAborts(t *testing.T) {
 	old := pollInterval
 	pollInterval = time.Millisecond
 	defer func() { pollInterval = old }()
 
-	// Every QR expires: maxQRRefreshCount (3) refreshes then abort.
-	statuses := make([]string, 0, maxQRRefreshCount)
-	for i := 0; i < maxQRRefreshCount; i++ {
-		statuses = append(statuses, "expired")
-	}
-	srv := httptest.NewServer(newFakeILink(statuses...).handler())
+	// Too many wrong pairing codes — login aborts (no refresh).
+	srv := httptest.NewServer(newFakeILink("verify_code_blocked").handler())
 	defer srv.Close()
 
-	_, err := Login(context.Background(), protocol.NewClient(), LoginOptions{BaseURL: srv.URL, OnQRURL: func(string) {}})
-	if err == nil {
-		t.Fatal("expected abort after max refreshes")
-	}
-}
-
-func TestLoginVerifyCodeBlockedRefreshes(t *testing.T) {
-	old := pollInterval
-	pollInterval = time.Millisecond
-	defer func() { pollInterval = old }()
-
-	// First QR blocked after repeated mismatches; second QR confirms.
-	f := newFakeILink("verify_code_blocked", "confirmed")
-	srv := httptest.NewServer(f.handler())
-	defer srv.Close()
-
-	creds, err := Login(context.Background(), protocol.NewClient(), LoginOptions{
+	_, err := Login(context.Background(), protocol.NewClient(), LoginOptions{
 		BaseURL:      srv.URL,
 		OnQRURL:      func(string) {},
 		OnVerifyCode: func(context.Context, bool) (string, error) { return "999", nil },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if creds.Token != "tok-1" {
-		t.Fatalf("creds = %+v", creds)
+	if err == nil {
+		t.Fatal("expected abort on verify_code_blocked")
 	}
 }
 

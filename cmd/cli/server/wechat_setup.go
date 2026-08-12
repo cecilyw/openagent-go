@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,6 +50,7 @@ func ResolveWechatCredentials(ctx context.Context, localCreds *protocol.Credenti
 	if localCreds != nil {
 		baseURL = localCreds.BaseURL
 	}
+	qrIssuedAt := time.Now()
 	creds, err := wechat.Login(ctx, client, wechat.LoginOptions{
 		BaseURL:    baseURL,
 		LocalCreds: localCreds,
@@ -60,6 +62,7 @@ func ResolveWechatCredentials(ctx context.Context, localCreds *protocol.Credenti
 			if err := saveWechatQR(url, qrCacheTTL); err != nil {
 				fmt.Fprintf(os.Stderr, "wechat: failed to cache QR: %v\n", err)
 			}
+			slog.Debug("wechat: QR code issued", "ttl", qrCacheTTL, "url", url)
 			if onQR != nil {
 				onQR(url, qrCacheTTL)
 				return
@@ -72,6 +75,8 @@ func ResolveWechatCredentials(ctx context.Context, localCreds *protocol.Credenti
 		},
 		OnScanned: onScanned,
 		OnExpired: func() {
+			alive := time.Since(qrIssuedAt).Round(time.Second)
+			slog.Debug("wechat: QR code expired", "alive", alive.String(), "ttl", qrCacheTTL)
 			clearWechatQR()
 		},
 		OnVerifyCode: onVerifyCode,
@@ -95,11 +100,11 @@ func ResolveWechatCredentials(ctx context.Context, localCreds *protocol.Credenti
 	return wc, nil
 }
 
-// qrCacheTTL is the QR cache lifetime used for the expires_in field. The
-// ilinkai protocol does not return an expiry; the cache is only valid
-// while a registration is in flight anyway (phase-guarded), so the TTL
-// is a frontend countdown cap, not a protocol deadline.
-const qrCacheTTL = 600
+// qrCacheTTL is the QR cache lifetime used for the expires_in field. Each
+// QR expires after ~120s server-side (measured empirically); the TTL
+// matches so the frontend countdown aligns with the real deadline. The
+// cache is phase-guarded regardless.
+const qrCacheTTL = 120
 
 // ── QR cache ──
 
