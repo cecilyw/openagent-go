@@ -167,3 +167,57 @@ type Test1Params struct {
 type Test2Params struct {
 	X int `json:"x,omitempty"`
 }
+
+// TestSessionNamedToolPrefix: a Named session returns tools as
+// "mcp__<server>__<tool>"; an unnamed session keeps original names.
+func TestSessionNamedToolPrefix(t *testing.T) {
+	ctx := context.Background()
+	server := NewServer("test-server", "1.0.0", nil)
+	if err := server.AddTool(&echoTool{}); err != nil {
+		t.Fatalf("AddTool: %v", err)
+	}
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Run(ctx, serverTransport) }()
+	client := NewClient("test-client", "1.0.0")
+	session, err := client.ConnectTransport(ctx, clientTransport)
+	if err != nil {
+		t.Fatalf("ConnectTransport: %v", err)
+	}
+	defer session.Close()
+
+	// Unnamed: original name.
+	tools, err := session.Tools(ctx)
+	if err != nil || len(tools) == 0 {
+		t.Fatalf("Tools: %v (n=%d)", err, len(tools))
+	}
+	if got := tools[0].Definition().Name; got != "echo" {
+		t.Fatalf("unnamed tool = %q, want echo", got)
+	}
+
+	// Named: prefixed + sanitized.
+	named, err := session.Named("my server!").Tools(ctx)
+	if err != nil {
+		t.Fatalf("Named Tools: %v", err)
+	}
+	if got := named[0].Definition().Name; got != "mcp__my-server-__echo" {
+		t.Fatalf("named tool = %q, want mcp__my-server-__echo", got)
+	}
+}
+
+// TestSanitizeName: characters outside [A-Za-z0-9_-] become '-'; empty
+// names fall back to "mcp".
+func TestSanitizeName(t *testing.T) {
+	cases := map[string]string{
+		"filesystem":  "filesystem",
+		"my server!":  "my-server-",
+		"abc/def":     "abc-def",
+		"中文名":        "---",
+		"":            "mcp",
+	}
+	for in, want := range cases {
+		if got := sanitizeName(in); got != want {
+			t.Fatalf("sanitizeName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

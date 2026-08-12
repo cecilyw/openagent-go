@@ -840,6 +840,7 @@ func (s *AgentServer) connectMCP(ctx context.Context, servers []openacp.McpServe
 	client := mcp.NewClient(s.AgentName, s.AgentVersion)
 	var sessions []*mcp.Session
 	var tools []openagent.Tool
+	seen := make(map[string]string) // tool name → server (duplicate detection)
 	for _, cfg := range servers {
 		sess, err := s.connectOneMCP(ctx, client, cfg)
 		if err != nil {
@@ -847,12 +848,24 @@ func (s *AgentServer) connectMCP(ctx context.Context, servers []openacp.McpServe
 			continue
 		}
 		sessions = append(sessions, sess)
-		st, err := sess.Tools(ctx)
+		// Name the session so tools are "mcp__<server>__<tool>" — unique
+		// across servers and self-describing to the model.
+		st, err := sess.Named(cfg.Name).Tools(ctx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "acp: MCP list tools %q failed: %v\n", cfg.Name, err)
 			continue
 		}
-		tools = append(tools, st...)
+		for _, t := range st {
+			name := t.Definition().Name
+			if owner, dup := seen[name]; dup {
+				// Two servers exposing the same tool name would make
+				// tool lookup ambiguous — skip the later one.
+				fmt.Fprintf(os.Stderr, "acp: MCP tool %q from server %q duplicates %q — skipped\n", name, cfg.Name, owner)
+				continue
+			}
+			seen[name] = cfg.Name
+			tools = append(tools, t)
+		}
 	}
 	return sessions, tools
 }

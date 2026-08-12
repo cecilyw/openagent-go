@@ -33,7 +33,9 @@ func connectMcpFromConfig(ctx context.Context, servers map[string]config.McpServ
 			slog.Warn("mcp connect failed", "name", name, "error", err)
 			continue
 		}
-		list, err := sess.Tools(ctx)
+		// Named so tools are "mcp__<server>__<tool>" (Claude Code
+		// convention) — unique across servers, self-describing.
+		list, err := sess.Named(name).Tools(ctx)
 		if err != nil {
 			sess.Close()
 			slog.Warn("mcp list tools failed", "name", name, "error", err)

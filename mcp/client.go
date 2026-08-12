@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -153,6 +154,39 @@ type Session struct {
 
 	// stderrBuf captures the process's stderr output for diagnostics.
 	stderrBuf *bytes.Buffer
+
+	// name is the server name. When set, tools returned by Tools() are
+	// named "mcp__<name>__<tool>" — unique
+	// across servers and self-describing to the model. Empty = tools
+	// keep the server's original names (backward compatible).
+	name string
+}
+
+// Named sets the server name on the session. Tools returned by Tools()
+// are then named "mcp__<name>__<tool>". The name is sanitized for use
+// in a tool name ([A-Za-z0-9_-] only — model APIs reject other
+// characters). Returns the session for chaining.
+func (s *Session) Named(name string) *Session {
+	s.name = sanitizeName(name)
+	return s
+}
+
+// sanitizeName keeps a server name safe for use inside a tool name:
+// model APIs require tool names to match [A-Za-z0-9_-]+.
+func sanitizeName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	if b.Len() == 0 {
+		return "mcp"
+	}
+	return b.String()
 }
 
 // Tools lists tools available on the MCP server and returns them as
@@ -170,9 +204,13 @@ func (s *Session) Tools(ctx context.Context) ([]openagent.Tool, error) {
 		if err != nil {
 			return nil, err
 		}
+		if s.name != "" {
+			def.Name = "mcp__" + s.name + "__" + def.Name
+		}
 		tools = append(tools, &mcpToolAdapter{
-			session: s.inner,
-			def:     def,
+			session:    s.inner,
+			def:        def,
+			serverName: s.name,
 		})
 	}
 	return tools, nil
@@ -222,8 +260,9 @@ func (s *Session) Stderr() string {
 
 // mcpToolAdapter wraps an MCP tool as an openagent.Tool.
 type mcpToolAdapter struct {
-	session *mcpsdk.ClientSession
-	def     openagent.FunctionDefinition
+	session    *mcpsdk.ClientSession
+	def        openagent.FunctionDefinition
+	serverName string // "" = unnamed session (tools keep original names)
 }
 
 func (a *mcpToolAdapter) Definition() openagent.FunctionDefinition {
