@@ -221,3 +221,37 @@ func TestSanitizeName(t *testing.T) {
 		}
 	}
 }
+
+// TestNamedSessionExecuteUsesOriginalName: a named tool's Execute must
+// call the server with the ORIGINAL tool name — the prefix is display-
+// only. This is the regression for the "unknown tool" bug: sending the
+// prefixed name in tools/call makes the server reject it.
+func TestNamedSessionExecuteUsesOriginalName(t *testing.T) {
+	ctx := context.Background()
+	server := NewServer("test-server", "1.0.0", nil)
+	if err := server.AddTool(&echoTool{}); err != nil {
+		t.Fatalf("AddTool: %v", err)
+	}
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Run(ctx, serverTransport) }()
+	client := NewClient("test-client", "1.0.0")
+	session, err := client.ConnectTransport(ctx, clientTransport)
+	if err != nil {
+		t.Fatalf("ConnectTransport: %v", err)
+	}
+	defer session.Close()
+
+	tools, err := session.Named("agentwork").Tools(ctx)
+	if err != nil || len(tools) == 0 {
+		t.Fatalf("Named Tools: %v", err)
+	}
+	named := tools[0]
+	if got := named.Definition().Name; got != "mcp__agentwork__echo" {
+		t.Fatalf("display name = %q, want mcp__agentwork__echo", got)
+	}
+	res := named.Execute(ctx, json.RawMessage(`{"message":"hi"}`))
+	if res.Error != nil || res.Content != "echo: hi" {
+		t.Fatalf("Execute = %+v, want echo: hi (server must receive the original name)", res)
+	}
+}

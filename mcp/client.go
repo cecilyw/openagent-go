@@ -204,12 +204,14 @@ func (s *Session) Tools(ctx context.Context) ([]openagent.Tool, error) {
 		if err != nil {
 			return nil, err
 		}
+		callName := def.Name // the server's registered name
 		if s.name != "" {
 			def.Name = "mcp__" + s.name + "__" + def.Name
 		}
 		tools = append(tools, &mcpToolAdapter{
 			session:    s.inner,
 			def:        def,
+			callName:   callName,
 			serverName: s.name,
 		})
 	}
@@ -260,8 +262,15 @@ func (s *Session) Stderr() string {
 
 // mcpToolAdapter wraps an MCP tool as an openagent.Tool.
 type mcpToolAdapter struct {
-	session    *mcpsdk.ClientSession
-	def        openagent.FunctionDefinition
+	session *mcpsdk.ClientSession
+	// def is the DISPLAY definition — when the session is named, def.Name
+	// carries the "mcp__<server>__<tool>" prefix the model sees.
+	def openagent.FunctionDefinition
+	// callName is the ORIGINAL tool name as the MCP server registered it.
+	// CallTool MUST send this, not def.Name: the server has no knowledge
+	// of the client-side prefix and rejects the prefixed name ("unknown
+	// tool").
+	callName   string
 	serverName string // "" = unnamed session (tools keep original names)
 }
 
@@ -293,7 +302,7 @@ func (a *mcpToolAdapter) Execute(ctx context.Context, args json.RawMessage) *ope
 	}()
 
 	result, err := a.session.CallTool(ctx, &mcpsdk.CallToolParams{
-		Name:      a.def.Name,
+		Name:      a.callName, // the server-s registered name, NOT the display name
 		Arguments: v,
 		Meta:      mcpsdk.Meta{"progressToken": token},
 	})
