@@ -41,6 +41,9 @@ func main() {
 	if err != nil && !os.IsNotExist(err) {
 		log.Fatalf("read settings: %v", err)
 	}
+	if len(raw) == 0 {
+		raw = []byte("{}")
+	}
 	var preCfg config.Config
 	if err := json.Unmarshal(raw, &preCfg); err != nil {
 		log.Fatalf("parse settings: %v", err)
