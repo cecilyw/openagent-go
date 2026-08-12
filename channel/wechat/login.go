@@ -23,7 +23,7 @@ type LoginOptions struct {
 	// OnScanned fires when the QR has been scanned — the frontend shows
 	// "scanned, confirm on your phone".
 	OnScanned func()
-	// OnExpired fires when the QR expired and a new one is requested.
+	// OnExpired fires when the QR expired (login will abort).
 	OnExpired func()
 	// OnVerifyCode is called when the server requires a pairing code (the
 	// digits shown in WeChat on the user's phone). isRetry is true when a
@@ -42,8 +42,8 @@ var pollInterval = 2 * time.Second
 //
 // State machine (8 states, polled every 2s): wait → scaned → confirmed;
 // need_verifycode asks the user for the pairing code shown on the phone;
-// verify_code_blocked and expired request a fresh QR (≤ maxQRRefreshCount
-// refreshes); scaned_but_redirect switches the poll host (IDC redirect);
+// verify_code_blocked and expired abort the login (single QR, no refresh);
+// scaned_but_redirect switches the poll host (IDC redirect);
 // binded_redirect reuses the local credentials for an already-bound bot.
 func Login(ctx context.Context, client *protocol.Client, opts LoginOptions) (*protocol.Credentials, error) {
 	baseURL := opts.BaseURL
@@ -59,124 +59,109 @@ func Login(ctx context.Context, client *protocol.Client, opts LoginOptions) (*pr
 		localTokens = []string{opts.LocalCreds.Token}
 	}
 
-	qrRefreshCount := 0
+	qr, err := client.GetQRCode(ctx, baseURL, localTokens)
+	if err != nil {
+		return nil, fmt.Errorf("get qr code: %w", err)
+	}
+	if opts.OnQRURL != nil {
+		opts.OnQRURL(qr.QRCodeImgURL)
+	} else {
+		fmt.Printf("Scan this URL in WeChat: %s\n", qr.QRCodeImgURL)
+	}
+
+	lastStatus := ""
+	currentPollBaseURL := baseURL
+	pendingVerifyCode := ""
+
+	// Poll loop. Each poll is a long request (~35s); a network error is
+	// treated as "still waiting" and retried.
 	for {
-		qrRefreshCount++
-		if qrRefreshCount > maxQRRefreshCount {
-			return nil, fmt.Errorf("qr code expired %d times — login aborted", maxQRRefreshCount)
-		}
-
-		qr, err := client.GetQRCode(ctx, baseURL, localTokens)
+		status, err := client.PollQRStatus(ctx, currentPollBaseURL, qr.QRCode, pendingVerifyCode)
 		if err != nil {
-			return nil, fmt.Errorf("get qr code: %w", err)
-		}
-		if opts.OnQRURL != nil {
-			opts.OnQRURL(qr.QRCodeImgURL)
-		} else {
-			fmt.Printf("Scan this URL in WeChat: %s\n", qr.QRCodeImgURL)
-		}
-
-		lastStatus := ""
-		currentPollBaseURL := baseURL
-		pendingVerifyCode := ""
-
-		// Inner poll loop for one QR. Each poll is a long request (~35s);
-		// a network error is treated as "still waiting" and retried.
-		for {
-			status, err := client.PollQRStatus(ctx, currentPollBaseURL, qr.QRCode, pendingVerifyCode)
-			if err != nil {
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
-				}
-				time.Sleep(pollInterval) // transient — keep waiting
-				continue
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
+			time.Sleep(pollInterval) // transient — keep waiting
+			continue
+		}
 
-			if status.Status != lastStatus {
-				lastStatus = status.Status
-				switch status.Status {
-				case "scaned":
-					// A pending pairing code that leads back to scaned was
-					// accepted — clear it so subsequent polls are clean.
-					pendingVerifyCode = ""
-					if opts.OnScanned != nil {
-						opts.OnScanned()
-					}
-				case "confirmed":
-					// no callback; handled below
-				case "expired":
-					if opts.OnExpired != nil {
-						opts.OnExpired()
-					}
-				}
-			}
-
+		if status.Status != lastStatus {
+			lastStatus = status.Status
 			switch status.Status {
-			case "confirmed":
-				if status.BotToken == "" || status.BotID == "" || status.UserID == "" {
-					return nil, fmt.Errorf("login confirmed but credentials missing (bot_token=%q bot_id=%q user_id=%q)",
-						status.BotToken, status.BotID, status.UserID)
-				}
-				resolvedBase := baseURL
-				if status.BaseURL != "" {
-					resolvedBase = status.BaseURL
-				}
-				return &protocol.Credentials{
-					Token:     status.BotToken,
-					BaseURL:   resolvedBase,
-					AccountID: status.BotID,
-					UserID:    status.UserID,
-				}, nil
-
-			case "need_verifycode":
-				// The phone shows a pairing code; ask the user and
-				// re-poll immediately with it attached.
-				isRetry := pendingVerifyCode != ""
-				prompt := opts.OnVerifyCode
-				if prompt == nil {
-					prompt = readVerifyCode
-				}
-				code, err := prompt(ctx, isRetry)
-				if err != nil {
-					return nil, fmt.Errorf("read pairing code: %w", err)
-				}
-				pendingVerifyCode = code
-				continue
-
-			case "verify_code_blocked":
-				// Too many wrong pairing codes — the QR is dead; get a
-				// fresh one (counts toward the refresh limit).
+			case "scaned":
+				// A pending pairing code that leads back to scaned was
+				// accepted — clear it so subsequent polls are clean.
 				pendingVerifyCode = ""
-				lastStatus = ""
-				goto newQR
-
-			case "binded_redirect":
-				// The bot is already bound to this client: the existing
-				// session is still valid — reuse the stored credentials
-				// instead of issuing a duplicate.
-				if opts.LocalCreds != nil && opts.LocalCreds.Token != "" {
-					return opts.LocalCreds, nil
+				if opts.OnScanned != nil {
+					opts.OnScanned()
 				}
-				return nil, fmt.Errorf("server reports bot already bound (binded_redirect) but no local credentials were found")
-
-			case "scaned_but_redirect":
-				// IDC redirect: continue polling on the new host.
-				if status.RedirectHost != "" {
-					currentPollBaseURL = "https://" + status.RedirectHost
-				}
-				time.Sleep(pollInterval)
-				continue
-
+			case "confirmed":
+				// no callback; handled below
 			case "expired":
-				lastStatus = ""
-				goto newQR
+				if opts.OnExpired != nil {
+					opts.OnExpired()
+				}
 			}
-
-			time.Sleep(pollInterval)
 		}
 
-	newQR:
-		// Outer loop requests a fresh QR.
+		switch status.Status {
+		case "confirmed":
+			if status.BotToken == "" || status.BotID == "" || status.UserID == "" {
+				return nil, fmt.Errorf("login confirmed but credentials missing (bot_token=%q bot_id=%q user_id=%q)",
+					status.BotToken, status.BotID, status.UserID)
+			}
+			resolvedBase := baseURL
+			if status.BaseURL != "" {
+				resolvedBase = status.BaseURL
+			}
+			return &protocol.Credentials{
+				Token:     status.BotToken,
+				BaseURL:   resolvedBase,
+				AccountID: status.BotID,
+				UserID:    status.UserID,
+			}, nil
+
+		case "need_verifycode":
+			// The phone shows a pairing code; ask the user and
+			// re-poll immediately with it attached.
+			isRetry := pendingVerifyCode != ""
+			prompt := opts.OnVerifyCode
+			if prompt == nil {
+				prompt = readVerifyCode
+			}
+			code, err := prompt(ctx, isRetry)
+			if err != nil {
+				return nil, fmt.Errorf("read pairing code: %w", err)
+			}
+			pendingVerifyCode = code
+			continue
+
+		case "verify_code_blocked":
+			// Too many wrong pairing codes — the QR is dead; abort.
+			return nil, fmt.Errorf("wechat: pairing code blocked — too many wrong attempts")
+
+		case "binded_redirect":
+			// The bot is already bound to this client: the existing
+			// session is still valid — reuse the stored credentials
+			// instead of issuing a duplicate.
+			if opts.LocalCreds != nil && opts.LocalCreds.Token != "" {
+				return opts.LocalCreds, nil
+			}
+			return nil, fmt.Errorf("server reports bot already bound (binded_redirect) but no local credentials were found")
+
+		case "scaned_but_redirect":
+			// IDC redirect: continue polling on the new host.
+			if status.RedirectHost != "" {
+				currentPollBaseURL = "https://" + status.RedirectHost
+			}
+			time.Sleep(pollInterval)
+			continue
+
+		case "expired":
+			return nil, fmt.Errorf("wechat: qr code expired — login aborted")
+		}
+
+		time.Sleep(pollInterval)
 	}
 }
 
@@ -195,8 +180,3 @@ func readVerifyCode(ctx context.Context, isRetry bool) (string, error) {
 	}
 	return code, nil
 }
-
-// maxQRRefreshCount bounds QR refreshes before login aborts. Each QR
-// expires after ~120s server-side (measured empirically); 5 × 120 = 600s
-// matches qrCacheTTL so the frontend countdown and abort align.
-const maxQRRefreshCount = 5
