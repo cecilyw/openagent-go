@@ -196,4 +196,7 @@ func readVerifyCode(ctx context.Context, isRetry bool) (string, error) {
 	return code, nil
 }
 
-const maxQRRefreshCount = 3
+// maxQRRefreshCount bounds QR refreshes before login aborts. Each QR
+// expires after ~120s server-side (measured empirically); 5 × 120 = 600s
+// matches qrCacheTTL so the frontend countdown and abort align.
+const maxQRRefreshCount = 5
