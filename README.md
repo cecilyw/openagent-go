@@ -15,11 +15,11 @@ A fully pluggable, multi-agent AI agent framework in Go.
 - **Structured tool results** — `ToolResult` carries content/JSON/error/truncation; oversized output spills to disk automatically (line-wrapped, read/grep-friendly) instead of flooding the model context
 - **Approval policy engine** — layered chain (rules → safety → approval memory → human) with argument editing and persistent "always allow" decisions
 - **Self-evolution** — LLM extractor turns finished runs into durable knowledge, recalled into later sessions
-- **Three-layer memory** — Working (token-driven), Compressed (LLM incremental summary via `summarizer/`), Archive (FTS5/vector searchable, never deleted); all three are provider-pluggable, including a remote OpenViking context database
+- **Three-layer memory** — Working (token-driven), Compressed (LLM incremental summary via `summarizer/`), Archive (vector/keyword searchable, never deleted); all three are provider-pluggable, including a remote OpenViking context database
 - **Sandbox** — native OS-level confinement (Linux bwrap, macOS Seatbelt) for shell, file, and network operations
-- **WASM plugins** — agent-level: `agent:tools` and `agent:observers` plug into the tool/observer pipeline. CLI-level: `cli:settings`, `cli:commands`, `cli:observers` for settings injection, command extension, and lifecycle monitoring
+- **WASM plugins** — agent-level: `agent:tools` and `agent:observers` plug into the tool/observer pipeline. CLI-level: `cli:settings`, `cli:commands`, `cli:observers`, `cli:http` for settings injection, command extension, lifecycle monitoring, and custom HTTP routes. Any plugin can declare cron-scheduled jobs.
 - **Static context profiles** — `AGENTS.md` (working rules) and `SOUL.md` (persona & limits) with user-level and project-level resolution
-- **Slash commands** — built-in `/help`, `/mode`, `/model`, `/context`, `/cwd`, `/clear`, `/rename`, `/sessions`, extensible via `slash/` registry
+- **Slash commands** — built-in `/help`, `/mode`, `/model`, `/compact`, `/context`, `/cwd`, `/clear`, `/rename`, `/sessions`, extensible via `slash/` registry
 - **Full CLI** — `openagent-cli` with cobra commands, config-driven models, keyring secrets, WASM plugin runtime
 - **IM channels** — Feishu/Lark (WebSocket, card-based streaming output with markdown and tool call cards, one-click QR setup, inline approval buttons, /clear and /mode commands), personal WeChat (Tencent ilinkai channel, QR login with pairing code, /clear command), and WeCom 企业微信 (official long connection, native streaming replies, QR robot auto-creation, /clear command)
 - **RunHooks with state** — start/end callbacks share opaque state; OTEL spans nest, slog logs duration
@@ -42,6 +42,19 @@ go build -o openagent-cli ./cmd/cli/
 
 # One-shot chat with streaming output
 ./openagent-cli run "Hello, introduce yourself briefly"
+
+# Enable OS-native sandbox for shell commands
+./openagent-cli serve --sandbox --port 8080
+
+# Toggle capabilities on/off (defaults: memory/summarizer/skills/mcp/embedder on, guard/approver off)
+./openagent-cli serve --guard on --approver on
+
+# Suppress all log output
+./openagent-cli serve -q --port 8080
+
+# Manage secrets in the system keyring
+./openagent-cli keyring set mykey keyvalue
+./openagent-cli keyring get mykey
 ```
 
 ### Configuration
@@ -148,6 +161,7 @@ The Feishu connection is a **process-level daemon** — the frontend only trigge
 | `GET /api/channels/feishu/status` | Connection state (`connected`, `app_id`, `connected_at`) — call on page load, then poll every few seconds |
 | `POST /api/channels/feishu/connect` | Start the connection; with no persisted credentials it starts QR registration and returns `202 {status:"registration", qr_url}` for the frontend to render |
 | `POST /api/channels/feishu/disconnect` | Tear down the connection (releases the machine lock); a later `POST /connect` re-establishes it |
+| `GET /api/channels/feishu/qr` | The registration QR (URL + base64 PNG + remaining lifetime) — re-fetch after a page refresh; `POST /connect` is idempotent while registering and does not re-issue it |
 | `GET /api/settings/channels/feishu` | The feishu configuration (`app_id`, masked `app_secret`) — the secret never leaves the server unmasked |
 | `PUT /api/settings/channels/feishu` | Store the feishu configuration (`{app_id, app_secret}`, empty secret keeps the current one) — written to settings.json, applied on the next connect |
 | `DELETE /api/settings/channels/feishu` | Clear the feishu credentials (a running connection keeps working until the next connect) — the "re-register" flow is DELETE + `POST /connect`, which then has no credentials and runs QR registration |
@@ -322,7 +336,7 @@ stores, policies, hooks, and observers are interfaces injected at assembly.
 
 Plugins are **WASM modules** (.wasm files). Any language that compiles to WASM works — Rust, Go, TypeScript, Zig, etc. The host runtime (wazero) loads and executes them in a sandboxed environment.
 
-A plugin declares its type via metadata. Currently we provide a Rust SDK (`plugin/pdk/rust/`) that wraps the FFI contract, but the ABI is simple enough to implement from any language.
+A plugin declares its type(s) via metadata. A single module can implement multiple types (comma-separated, e.g. `"cli:settings,cli:http"`). We provide a Rust SDK (`plugin/pdk/rust/`, crate `openagent-pdk`) that wraps the FFI contract via the `Plugin` trait + `export!` macro — but the ABI is simple enough to implement from any language.
 
 | Plugin type | What it does |
 |-------------|--------------|
@@ -331,26 +345,31 @@ A plugin declares its type via metadata. Currently we provide a Rust SDK (`plugi
 | `cli:settings` | Transforms `settings.json` at startup (merge env vars, add providers, etc.) |
 | `cli:commands` | Registers extra cobra subcommands into the CLI |
 | `cli:observers` | Monitors CLI command lifecycle (startup/shutdown/command enter/exit) |
+| `cli:http` | Registers custom HTTP routes served at `/api/plugins/<name>/<path>` |
+
+Any plugin type can also declare **cron-scheduled jobs** in its metadata — the host registers them with the scheduler and calls back when they fire.
 
 ### How it works
 
-Each plugin type exposes one or two exported functions:
+Every plugin must export `metadata()` (returns JSON with type, name, description, schedules, routes), `alloc(size)` (host-to-guest memory allocation), and optionally `dealloc(ptr)` (memory reclamation). Each plugin type then adds its own entry-point exports:
 
 | Type | Exports | Signature |
 |------|---------|-----------|
-| `agent:tools` | `openagent_agent_tools()` → JSON | Returns `[{name, description, parameters}]` |
-| | `openagent_execute(name, args)` → string | Called when the agent invokes the tool |
-| `agent:observers` | `openagent_on_stage(event_json)` | Called on each stage enter/leave |
-| `cli:settings` | `openagent_cli_init(settings_json)` → JSON | Returns merged settings |
-| `cli:commands` | `openagent_cli_commands()` → JSON | Returns `[{use, short, long}]` |
-| | `openagent_cli_run(name, args_json)` → string | Called when the command runs |
-| `cli:observers` | `openagent_cli_on_startup()` / `...on_shutdown()` / etc. | Lifecycle callbacks |
+| `agent:tools` | `execute(ptr, len)` → packed JSON | Input: `ToolInput{args}`. Returns `ToolOutput{result, error}`. Tool name/description/parameters come from `metadata()`. |
+| `agent:observers` | `run(ptr, len)` → packed JSON | Input: `StageInput{name, phase, detail, error}`. Returns `StageOutput{action, reason}` — `"continue"` or `"abort"`. |
+| `cli:settings` | `init(ptr, len)` → packed JSON | Input: current settings JSON. Returns merged settings JSON. |
+| `cli:commands` | `commands()` → JSON | Returns `CommandDef[]` (name, use, short, long, args, flags, children, aliases, example). |
+| | `run_<name>(ptr, len)` → packed | One export per leaf command (dashes → underscores). Input: `CommandInput{args, flags}`. |
+| `cli:observers` | `on_startup()` / `on_shutdown()` | No-arg lifecycle callbacks. |
+| | `on_command_start(ptr, len)` / `on_command_end(ptr, len)` | Input: command path string (end includes error suffix). |
+| `cli:http` | `handle_request(ptr, len)` → packed JSON | Input: `HttpRequest{method, path, params, query, headers, body}`. Returns `HttpResp{status, headers, body}`. |
+| Scheduled jobs | `run_scheduled(ptr, len)` → packed JSON | Input: `ScheduledJobInput{id, scheduled_at}`. Returns `ScheduledJobResult{result, error}`. |
 
-The host runtime (wazero + `plugin/wasmhost/`) provides a set of importable host functions (`log_info`, `keyring_get`, `http_request`, `utc_now`, etc.) that plugins can call.
+The host runtime (wazero + `plugin/wasmhost/`) provides 28 importable host functions that plugins can call.
 
 ### Enabling plugins
 
-Place `.wasm` files in a directory and configure it in `settings.json`:
+Place `.wasm` files in a directory (or reference individual files) and configure in `settings.json`:
 
 ```json
 {
@@ -358,7 +377,7 @@ Place `.wasm` files in a directory and configure it in `settings.json`:
 }
 ```
 
-At startup the CLI scans all configured directories for `.wasm` files, reads their metadata, instantiates them, and wires them into the agent or CLI command tree.
+Each entry may be a directory (scanned for `*.wasm`) or a single `.wasm` file path. At startup the CLI reads each module's metadata, instantiates it, and wires it into the agent or CLI.
 
 ### Compiling a plugin (Rust example)
 
@@ -374,7 +393,7 @@ cargo build --release --target wasm32-unknown-unknown
 cp target/wasm32-unknown-unknown/release/example_agent_tool.wasm ~/.openagent/plugins/echo.wasm
 ```
 
-Or use the Makefile:
+Or use the Makefile (builds tool, observer, and envsync examples):
 
 ```bash
 make -C examples/plugin
@@ -383,49 +402,117 @@ make -C examples/plugin
 ### Writing a tool plugin (agent:tools)
 
 ```rust
-use openagent_sdk::tool::{register_tools, ToolDef};
+#![no_std]
+#![no_main]
+extern crate alloc;
+use openagent_pdk::prelude::*;
+use openagent_pdk::export::Plugin;
 
-#[no_mangle]
-pub extern "C" fn openagent_agent_tools() -> *const u8 {
-    register_tools(&[ToolDef {
-        name: "echo",
-        description: "Echo back the input message.",
-        parameters: r#"{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}"#,
-    }])
+struct EchoPlugin;
+impl Plugin for EchoPlugin {
+    fn plugin_type() -> &'static str { "agent:tools" }
+    fn name() -> &'static str { "echo" }
+    fn description() -> &'static str { "Echo back the input message." }
+    fn tool_parameters() -> Option<&'static str> {
+        Some(r#"{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}"#)
+    }
+    fn execute(args: &serde_json::Value) -> Result<String, String> {
+        let msg = args.get("message").and_then(|v| v.as_str()).unwrap_or("(empty)");
+        Ok(format!("echo: {}", msg))
+    }
 }
 
-#[no_mangle]
-pub extern "C" fn openagent_execute(name: &str, args: &str) -> String {
-    format!("echo: {}", extract_field(args, "message"))
-}
+openagent_pdk::export!(EchoPlugin);
 ```
 
 ### Writing an observer plugin (agent:observers)
 
 ```rust
-use openagent_sdk::observer::StageEvent;
+#![no_std]
+#![no_main]
+extern crate alloc;
+use openagent_pdk::prelude::*;
+use openagent_pdk::export::Plugin;
 
-#[no_mangle]
-pub extern "C" fn openagent_on_stage(event_json: &str) {
-    let e: StageEvent = serde_json::from_str(event_json).unwrap();
-    if e.phase == "enter" {
-        // log_info is an imported host function
+struct LoggerPlugin;
+impl Plugin for LoggerPlugin {
+    fn plugin_type() -> &'static str { "agent:observers" }
+    fn name() -> &'static str { "observer_logger" }
+    fn stage_filter() -> (&'static str, &'static str) { ("*", "*") }
+
+    fn observe_stage(event: &StageInput) -> StageOutput {
+        host::log_info(&format!("stage={} phase={}", event.name, event.phase));
+        StageOutput { action: String::from("continue"), reason: String::new() }
     }
 }
+
+openagent_pdk::export!(LoggerPlugin);
+```
+
+### Writing a scheduled-job plugin
+
+```rust
+#![no_std]
+#![no_main]
+extern crate alloc;
+use openagent_pdk::prelude::*;
+use openagent_pdk::export::Plugin;
+
+struct EnvSyncPlugin;
+impl Plugin for EnvSyncPlugin {
+    fn name() -> &'static str { "envsync" }
+    fn description() -> &'static str { "Sync keyring secret into env every 5 min" }
+
+    fn scheduled_jobs() -> Vec<ScheduledJob> {
+        vec![ScheduledJob {
+            id: "sync-keyring-env".into(),
+            cron: "*/5 * * * *".into(),
+            description: "sync keyring secret into env".into(),
+        }]
+    }
+
+    fn run_scheduled_job(job: &ScheduledJobInput) -> Result<String, String> {
+        let secret = host::keyring_get("openagent", "PLUGIN_SECRET")?;
+        host::env_set("OPENAGENT_PLUGIN_SECRET", &secret)?;
+        Ok(format!("job {} synced {} bytes", job.id, secret.len()))
+    }
+}
+
+openagent_pdk::export!(EnvSyncPlugin);
 ```
 
 ### Host API (importable from any language)
 
-| Function | Purpose |
-|----------|---------|
-| `log_info(msg)` / `log_warn(msg)` / `log_error(msg)` | Logging through the host |
-| `utc_now() -> i64` | Current time in nanoseconds |
-| `keyring_get(service, key) -> string` | Read from system keyring |
-| `keyring_set(service, key, value)` | Write to system keyring |
-| `keyring_delete(service, key)` | Delete from system keyring |
-| `http_request(method, url, headers_json, body) -> {status, body}` | Outbound HTTP |
+| Category | Function | Purpose |
+|----------|----------|---------|
+| Logging | `log_info(msg)` / `log_warn(msg)` / `log_error(msg)` | Logging through the host |
+| Time | `utc_now() -> u64` | Current time in nanoseconds |
+| Keyring | `keyring_get(service, key) -> string` | Read from system keyring |
+| | `keyring_set(service, key, value)` | Write to system keyring |
+| | `keyring_delete(service, key)` | Delete from system keyring |
+| HTTP | `http_request(method, url, headers_json, body) -> {status, body}` | Outbound HTTP |
+| Process | `exec_command(cmd, args, cwd, env, env_replace, timeout_ms) -> {stdout, stderr, exit_code}` | Run a child process |
+| Env | `env_get(key) -> string` | Read host process env var |
+| | `env_set(key, value)` | Set host process env var |
+| | `env_unset(key)` | Unset host process env var |
+| | `env_list() -> [{key, value}]` | List full host environment |
+| Filesystem | `fs_read(path) -> base64` | Read file as base64 |
+| | `fs_write(path, data)` | Write file |
+| | `fs_readdir(path) -> [{name, is_dir}]` | List directory |
+| | `file_md5(path) -> string` | MD5 hash of a file |
+| | `directory_md5(path) -> string` | Aggregate MD5 of a directory |
+| Runtime | `runtime_session_id() -> string` | Current session ID |
+| | `runtime_user_id() -> string` | Current user ID |
+| | `runtime_turn_count() -> string` | Current turn count |
+| | `runtime_model_id() -> string` | Current model ID |
+| | `runtime_provider() -> string` | Current provider name |
+| | `runtime_get_metadata(key) -> string` | Read session metadata |
+| | `runtime_set_metadata(key, value)` | Write session metadata |
+| | `runtime_set_model_config(json)` | Replace model (provider/model_id/api_key/base_url) |
+| | `runtime_set_system_prompts(json)` | Override system prompts |
+| | `runtime_set_max_turns(n)` | Override max turns |
 
-Full example: `examples/plugin/`. Rust SDK: `plugin/pdk/rust/`.
+Full examples: `examples/plugin/`. Rust SDK: `plugin/pdk/rust/`.
 
 ## Examples
 
@@ -440,19 +527,22 @@ Full example: `examples/plugin/`. Rust SDK: `plugin/pdk/rust/`.
 | `examples/observer/` | Pipeline observer |
 | `examples/delegate/` | Agent as tool delegation |
 | `examples/sandbox/` | Native sandbox tools |
-| `examples/plugin/` | WASM tool + observer plugins |
+| `examples/plugin/` | WASM tool, observer, and scheduled-job plugins |
 | `examples/skill/` | On-demand skill loading |
 | `examples/acp/` | ACP agent protocol (server + client) |
 | `examples/artifact/` | Result policy — large tool results spill to disk |
 | `examples/browser-agent/` | Browser agent via Playwright MCP |
 | `examples/mcp-client/` | MCP client demo (IaC pipeline) |
+| `examples/frontend/` | Vue.js frontend control panel (channel status, settings, QR rendering) |
 | `cmd/cli/` | Full-featured CLI with WASM plugin runtime |
+| `cmd/tui/` | TUI chat client (bubbletea v2, streaming, human-in-the-loop approval) |
 
 ## Packages
 
 | Package | Purpose |
 |---------|---------|
 | `openagent` | Core types — Agent (pure config), Team, ToolResult, token helpers |
+| `agent/` | Agent config builders — options, goal instructions, sub-agent router |
 | `kernel/` | Runtime — the 8-node execution engine (memory → prompt → guard → model → guard → policy → tools → store) |
 | `execution/` | Tool execution — parallel jobs, retry, streaming, result policy |
 | `governance/` | Approval policy engine — rules → safety → memory → human, persistent decisions |
@@ -465,26 +555,36 @@ Full example: `examples/plugin/`. Rust SDK: `plugin/pdk/rust/`.
 | `slash/` | Slash command registry and dispatch |
 | `summarizer/` | LLM-based incremental conversation compression |
 | `session/` | Session store interface + token-budget compression |
-| `session/sqlite/` | SQLite session store |
+| `session/sqlite/` | SQLite session store (FTS5 full-text index) |
 | `session/file/` | File-backed session store |
-| `provider/memory/` | Durable knowledge backends (sqlite, file) |
+| `provider/memory/` | Durable knowledge backends (sqlite with vector recall, file) |
 | `provider/skill/` | On-demand skill matching/loading |
 | `provider/resource/` | External reference resources |
 | `provider/openviking/` | OpenViking context database client (memory/skill/resource over HTTP) |
-| `model/openai/` | OpenAI ChatCompletion + streaming |
+| `model/openai/` | OpenAI ChatCompletion + streaming + embeddings |
+| `embedder/` | Embedding backends — BGE (offline ONNX Runtime) and OpenAI-compatible API |
 | `tokenizer/` | tiktoken model-aware token counting (sampled estimate for huge texts) |
 | `sandbox/native/` | OS-level process confinement (bwrap/Seatbelt) |
 | `eventbus/` | Session-scoped pub/sub for SSE |
-| `plugin/wasmhost/` | Shared WASM host module (keyring, HTTP, logging, utc_now) |
+| `plugin/wasmhost/` | Shared WASM host module (keyring, HTTP, filesystem, env, logging, runtime) |
 | `plugin/agent/wasm/` | Agent-scoped WASM plugin host |
 | `plugin/cli/` | CLI plugin manager and types |
-| `plugin/cli/wasm/` | CLI-scoped WASM runtime, loader, observer hub |
-| `plugin/pdk/rust/` | Rust SDK crate for building WASM plugins |
+| `plugin/cli/wasm/` | CLI-scoped WASM runtime, loader, observer hub, HTTP route dispatcher |
+| `plugin/pdk/rust/` | Rust SDK crate (`openagent-pdk`) for building WASM plugins |
 | `skill/fs/` | Filesystem skill loader |
 | `mcp/` | Model Context Protocol client |
 | `guard/llm/` | LLM-based input/output guard |
 | `hooks/otel/` | OpenTelemetry hooks |
 | `hooks/slog/` | Structured logging hooks |
+| `hooks/redact/` | Masks sensitive env-var values in tool results |
 | `tool/` | Built-in tools (shell, read, write, ls, grep, edit, websearch, webfetch, ACP fs, ACP terminal) |
-| `channel/` | IM platform adapters — Feishu WebSocket, card rendering |
-| `cmd/cli/` | CLI runtime, WASM host, Rust SDK examples |
+| `channel/` | IM platform adapters — Feishu (WebSocket, card rendering), WeChat (ilinkai HTTP), WeCom (长连接 streaming) |
+| `keyring/` | System keychain wrapper (Linux Secret Service/kernel keyring, macOS Keychain, Windows Credential Manager) |
+| `process/` | Background shell-process lifecycle management (track, persist output, kill across turns) |
+| `scheduler/` | Cron-based job scheduling for WASM plugin scheduled tasks |
+| `utils/` | Shared helpers — SSRF-hardened HTTP client, filepath validation, flock, JSON |
+| `iac/` | Terraform wrapper — binary install/mirror management, init/plan/apply/destroy |
+| `version/` | Build-time binary identity (name + version via ldflags) |
+| `cmd/cli/` | CLI runtime, WASM host, REST/ACP server, settings, channel managers |
+| `cmd/tui/` | TUI chat client (bubbletea v2) |
+| `cmd/mcp/` | IaC MCP server — cloud deployment tools (HuaweiCloud, Aliyun) over MCP stdio |

@@ -15,11 +15,11 @@
 - **结构化工具结果** — `ToolResult` 携带内容/JSON/错误/截断状态；超长输出自动落盘（按行包装、read/grep 可读），不淹没模型上下文
 - **审批策略引擎** — 分层策略链（规则 → 安全 → 审批记忆 → 人工），支持参数编辑和跨重启的 "始终允许" 决策
 - **自我进化** — LLM 提取器将完成的对话转化为持久知识，在后续会话中召回
-- **三层记忆系统** — Working（token 驱动）、Compressed（LLM 增量摘要，`summarizer/`）、Archive（FTS5/向量检索，永不删除）；三层均可插拔 Provider，含远程 OpenViking 上下文数据库
+- **三层记忆系统** — Working（token 驱动）、Compressed（LLM 增量摘要，`summarizer/`）、Archive（向量/关键词检索，永不删除）；三层均可插拔 Provider，含远程 OpenViking 上下文数据库
 - **沙箱环境** — 原生 OS 级别隔离（Linux bwrap、macOS Seatbelt），安全执行 shell、文件、网络操作
-- **WASM 插件** — Agent 级：`agent:tools` 和 `agent:observers` 接入工具/观测器管线。CLI 级：`cli:settings`、`cli:commands`、`cli:observers`，用于设置注入、命令扩展和生命周期监控
+- **WASM 插件** — Agent 级：`agent:tools` 和 `agent:observers` 接入工具/观测器管线。CLI 级：`cli:settings`、`cli:commands`、`cli:observers`、`cli:http`，用于设置注入、命令扩展、生命周期监控和自定义 HTTP 路由。任意插件均可声明 cron 定时任务。
 - **静态上下文配置** — `AGENTS.md`（工作规则）和 `SOUL.md`（性格与底线），支持用户级和项目级覆盖
-- **Slash 命令** — 内置 `/help`、`/mode`、`/model`、`/context`、`/cwd`、`/clear`、`/rename`、`/sessions`，通过 `slash/` 注册表扩展
+- **Slash 命令** — 内置 `/help`、`/mode`、`/model`、`/compact`、`/context`、`/cwd`、`/clear`、`/rename`、`/sessions`，通过 `slash/` 注册表扩展
 - **完整 CLI** — `openagent-cli`，cobra 命令、配置驱动模型、keyring 密钥管理、WASM 插件运行时
 - **IM 频道** — 飞书/Lark（WebSocket，卡片式流式输出：Markdown 渲染、工具调用卡片，一键扫码创建应用，内嵌审批按钮、/clear 和 /mode 命令）、个人微信（腾讯 ilinkai 官方通道，扫码登录 + 配对码，/clear 命令）、企业微信（官方长连接，原生流式回复，扫码自动创建机器人，/clear 命令）
 - **RunHooks 状态传递** — Start/End 回调共享不透明状态，OTEL 正确嵌套 span，slog 精确计时
@@ -42,6 +42,19 @@ go build -o openagent-cli ./cmd/cli/
 
 # 一次性流式对话
 ./openagent-cli run "你好，请介绍一下你自己"
+
+# 启用 OS 原生沙箱执行 shell 命令
+./openagent-cli serve --sandbox --port 8080
+
+# 按需开关能力（默认：memory/summarizer/skills/mcp/embedder 开，guard/approver 关）
+./openagent-cli serve --guard on --approver on
+
+# 静默所有日志输出
+./openagent-cli serve -q --port 8080
+
+# 管理系统密钥环里
+./openagent-cli keyring set mykey keyvalue
+./openagent-cli keyring get mykey
 ```
 
 ### 配置
@@ -148,6 +161,7 @@ export BOCHA_API_KEY=<你的-key>   # 在 https://open.bochaai.com 获取
 | `GET /api/channels/feishu/status` | 连接状态（`connected`、`app_id`、`connected_at`）——页面加载时调用，之后每几秒轮询 |
 | `POST /api/channels/feishu/connect` | 启动连接；无持久化凭据时触发扫码注册，返回 `202 {status:"registration", qr_url}` 供前端渲染二维码 |
 | `POST /api/channels/feishu/disconnect` | 断开连接（释放机器锁）；之后 `POST /connect` 重新建立 |
+| `GET /api/channels/feishu/qr` | 注册二维码（URL + base64 PNG + 剩余有效期）——刷新页面后重新获取；`POST /connect` 在注册期间幂等，不会重复签发 |
 | `GET /api/settings/channels/feishu` | 飞书配置（`app_id`、脱敏 `app_secret`）——secret 绝不完整出服务端 |
 | `PUT /api/settings/channels/feishu` | 保存飞书配置（`{app_id, app_secret}`，secret 留空 = 保持原值）——写入 settings.json，下次连接生效 |
 | `DELETE /api/settings/channels/feishu` | 清除飞书凭据（运行中的连接继续用旧凭据直到下次连接）——"重新注册"流程 = DELETE + `POST /connect`（此时无凭据，走扫码注册） |
@@ -319,7 +333,7 @@ OpenViking 是一个上下文数据库，提供服务端记忆、技能和资源
 
 插件是 **WASM 模块**（.wasm 文件）。任何能编译到 WASM 的语言都可以 — Rust、Go、TypeScript、Zig 等。宿主运行时（wazero）在沙箱环境中加载和执行它们。
 
-每个插件通过元数据声明自己的类型。目前我们提供了 Rust SDK（`plugin/pdk/rust/`）封装了 FFI 契约，但 ABI 足够简单，任何语言都能直接实现。
+每个插件通过元数据声明自己的类型（可逗号分隔实现多类型，如 `"cli:settings,cli:http"`）。我们提供了 Rust SDK（`plugin/pdk/rust/`，crate 名 `openagent-pdk`），通过 `Plugin` trait + `export!` 宏封装 FFI 契约 — 但 ABI 足够简单，任何语言都能直接实现。
 
 | 插件类型 | 功能 |
 |----------|------|
@@ -328,26 +342,31 @@ OpenViking 是一个上下文数据库，提供服务端记忆、技能和资源
 | `cli:settings` | 启动时转换 settings.json（合并环境变量、添加 provider 等） |
 | `cli:commands` | 注册额外的 cobra 子命令到 CLI |
 | `cli:observers` | 监控 CLI 命令生命周期（启动/关闭/命令 enter/exit） |
+| `cli:http` | 注册自定义 HTTP 路由，服务于 `/api/plugins/<name>/<path>` |
+
+任意插件类型还可声明 **cron 定时任务** — 宿主通过调度器注册，触发时回调插件。
 
 ### 工作原理
 
-每种插件类型暴露一或两个导出函数：
+每个插件必须导出 `metadata()`（返回包含 type、name、description、schedules、routes 的 JSON）、`alloc(size)`（宿主到客端的内存分配）和可选的 `dealloc(ptr)`（内存回收）。各类型再添加自己的入口导出：
 
 | 类型 | 导出函数 | 签名 |
 |------|---------|------|
-| `agent:tools` | `openagent_agent_tools()` → JSON | 返回 `[{name, description, parameters}]` |
-| | `openagent_execute(name, args)` → string | agent 调用工具时执行 |
-| `agent:observers` | `openagent_on_stage(event_json)` | 每个阶段 enter/leave 时调用 |
-| `cli:settings` | `openagent_cli_init(settings_json)` → JSON | 返回合并后的 settings |
-| `cli:commands` | `openagent_cli_commands()` → JSON | 返回 `[{use, short, long}]` |
-| | `openagent_cli_run(name, args_json)` → string | 命令执行时调用 |
-| `cli:observers` | `openagent_cli_on_startup()` / `...on_shutdown()` 等 | 生命周期回调 |
+| `agent:tools` | `execute(ptr, len)` → packed JSON | 输入 `ToolInput{args}`，返回 `ToolOutput{result, error}`。工具名/描述/参数来自 `metadata()`。 |
+| `agent:observers` | `run(ptr, len)` → packed JSON | 输入 `StageInput{name, phase, detail, error}`，返回 `StageOutput{action, reason}` — `"continue"` 或 `"abort"`。 |
+| `cli:settings` | `init(ptr, len)` → packed JSON | 输入当前 settings JSON，返回合并后的 settings。 |
+| `cli:commands` | `commands()` → JSON | 返回 `CommandDef[]`（name、use、short、long、args、flags、children、aliases、example）。 |
+| | `run_<name>(ptr, len)` → packed | 每个叶子命令一个导出（短横线转下划线）。输入 `CommandInput{args, flags}`。 |
+| `cli:observers` | `on_startup()` / `on_shutdown()` | 无参生命周期回调。 |
+| | `on_command_start(ptr, len)` / `on_command_end(ptr, len)` | 输入命令路径字符串（end 含错误后缀）。 |
+| `cli:http` | `handle_request(ptr, len)` → packed JSON | 输入 `HttpRequest{method, path, params, query, headers, body}`，返回 `HttpResp{status, headers, body}`。 |
+| 定时任务 | `run_scheduled(ptr, len)` → packed JSON | 输入 `ScheduledJobInput{id, scheduled_at}`，返回 `ScheduledJobResult{result, error}`。 |
 
-宿主运行时（wazero + `plugin/wasmhost/`）提供了一组可导入的 host 函数（`log_info`、`keyring_get`、`http_request`、`utc_now` 等），插件可以调用。
+宿主运行时（wazero + `plugin/wasmhost/`）提供 28 个可导入的 host 函数供插件调用。
 
 ### 启用插件
 
-将 `.wasm` 文件放入目录并在 `settings.json` 中配置：
+将 `.wasm` 文件放入目录（或直接引用单个文件）并在 `settings.json` 中配置：
 
 ```json
 {
@@ -355,7 +374,7 @@ OpenViking 是一个上下文数据库，提供服务端记忆、技能和资源
 }
 ```
 
-CLI 启动时会扫描所有配置目录下的 `.wasm` 文件，读取元数据、实例化，并接入 agent 或 CLI 命令树。
+每个条目可以是目录（扫描 `*.wasm`）或单个 `.wasm` 文件路径。CLI 启动时读取每个模块的元数据、实例化，并接入 agent 或 CLI。
 
 ### 编译插件（Rust 示例）
 
@@ -371,7 +390,7 @@ cargo build --release --target wasm32-unknown-unknown
 cp target/wasm32-unknown-unknown/release/example_agent_tool.wasm ~/.openagent/plugins/echo.wasm
 ```
 
-或使用 Makefile 一步完成：
+或使用 Makefile 一步完成（构建 tool、observer、envsync 三个示例）：
 
 ```bash
 make -C examples/plugin
@@ -380,47 +399,115 @@ make -C examples/plugin
 ### 编写工具插件 (agent:tools)
 
 ```rust
-use openagent_sdk::tool::{register_tools, ToolDef};
+#![no_std]
+#![no_main]
+extern crate alloc;
+use openagent_pdk::prelude::*;
+use openagent_pdk::export::Plugin;
 
-#[no_mangle]
-pub extern "C" fn openagent_agent_tools() -> *const u8 {
-    register_tools(&[ToolDef {
-        name: "echo",
-        description: "回显输入消息。",
-        parameters: r#"{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}"#,
-    }])
+struct EchoPlugin;
+impl Plugin for EchoPlugin {
+    fn plugin_type() -> &'static str { "agent:tools" }
+    fn name() -> &'static str { "echo" }
+    fn description() -> &'static str { "回显输入消息。" }
+    fn tool_parameters() -> Option<&'static str> {
+        Some(r#"{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}"#)
+    }
+    fn execute(args: &serde_json::Value) -> Result<String, String> {
+        let msg = args.get("message").and_then(|v| v.as_str()).unwrap_or("(empty)");
+        Ok(format!("echo: {}", msg))
+    }
 }
 
-#[no_mangle]
-pub extern "C" fn openagent_execute(name: &str, args: &str) -> String {
-    format!("echo: {}", extract_field(args, "message"))
-}
+openagent_pdk::export!(EchoPlugin);
 ```
 
 ### 编写观测器插件 (agent:observers)
 
 ```rust
-use openagent_sdk::observer::StageEvent;
+#![no_std]
+#![no_main]
+extern crate alloc;
+use openagent_pdk::prelude::*;
+use openagent_pdk::export::Plugin;
 
-#[no_mangle]
-pub extern "C" fn openagent_on_stage(event_json: &str) {
-    let e: StageEvent = serde_json::from_str(event_json).unwrap();
-    if e.phase == "enter" {
-        // log_info 是可导入的 host 函数
+struct LoggerPlugin;
+impl Plugin for LoggerPlugin {
+    fn plugin_type() -> &'static str { "agent:observers" }
+    fn name() -> &'static str { "observer_logger" }
+    fn stage_filter() -> (&'static str, &'static str) { ("*", "*") }
+
+    fn observe_stage(event: &StageInput) -> StageOutput {
+        host::log_info(&format!("stage={} phase={}", event.name, event.phase));
+        StageOutput { action: String::from("continue"), reason: String::new() }
     }
 }
+
+openagent_pdk::export!(LoggerPlugin);
+```
+
+### 编写定时任务插件
+
+```rust
+#![no_std]
+#![no_main]
+extern crate alloc;
+use openagent_pdk::prelude::*;
+use openagent_pdk::export::Plugin;
+
+struct EnvSyncPlugin;
+impl Plugin for EnvSyncPlugin {
+    fn name() -> &'static str { "envsync" }
+    fn description() -> &'static str { "每 5 分钟将 keyring 密钥同步到环境变量" }
+
+    fn scheduled_jobs() -> Vec<ScheduledJob> {
+        vec![ScheduledJob {
+            id: "sync-keyring-env".into(),
+            cron: "*/5 * * * *".into(),
+            description: "sync keyring secret into env".into(),
+        }]
+    }
+
+    fn run_scheduled_job(job: &ScheduledJobInput) -> Result<String, String> {
+        let secret = host::keyring_get("openagent", "PLUGIN_SECRET")?;
+        host::env_set("OPENAGENT_PLUGIN_SECRET", &secret)?;
+        Ok(format!("job {} synced {} bytes", job.id, secret.len()))
+    }
+}
+
+openagent_pdk::export!(EnvSyncPlugin);
 ```
 
 ### Host API（任何语言都可调用）
 
-| 函数 | 用途 |
-|------|------|
-| `log_info(msg)` / `log_warn(msg)` / `log_error(msg)` | 通过宿主记录日志 |
-| `utc_now() -> i64` | 当前纳秒时间戳 |
-| `keyring_get(service, key) -> string` | 读取系统密钥环 |
-| `keyring_set(service, key, value)` | 写入系统密钥环 |
-| `keyring_delete(service, key)` | 删除系统密钥环 |
-| `http_request(method, url, headers_json, body) -> {status, body}` | 发送 HTTP 请求 |
+| 类别 | 函数 | 用途 |
+|------|------|------|
+| 日志 | `log_info(msg)` / `log_warn(msg)` / `log_error(msg)` | 通过宿主记录日志 |
+| 时间 | `utc_now() -> u64` | 当前纳秒时间戳 |
+| 密钥环 | `keyring_get(service, key) -> string` | 读取系统密钥环 |
+| | `keyring_set(service, key, value)` | 写入系统密钥环 |
+| | `keyring_delete(service, key)` | 删除系统密钥环 |
+| HTTP | `http_request(method, url, headers_json, body) -> {status, body}` | 发送 HTTP 请求 |
+| 进程 | `exec_command(cmd, args, cwd, env, env_replace, timeout_ms) -> {stdout, stderr, exit_code}` | 执行子进程 |
+| 环境变量 | `env_get(key) -> string` | 读取宿主进程环境变量 |
+| | `env_set(key, value)` | 设置宿主进程环境变量 |
+| | `env_unset(key)` | 删除宿主进程环境变量 |
+| | `env_list() -> [{key, value}]` | 列出完整宿主环境 |
+| 文件系统 | `fs_read(path) -> base64` | 读取文件（base64） |
+| | `fs_write(path, data)` | 写入文件 |
+| | `fs_readdir(path) -> [{name, is_dir}]` | 列出目录 |
+| | `file_md5(path) -> string` | 文件 MD5 哈希 |
+| | `directory_md5(path) -> string` | 目录聚合 MD5 |
+| 运行时 | `runtime_session_id() -> string` | 当前会话 ID |
+| | `runtime_user_id() -> string` | 当前用户 ID |
+| | `runtime_turn_count() -> string` | 当前轮次计数 |
+| | `runtime_model_id() -> string` | 当前模型 ID |
+| | `runtime_provider() -> string` | 当前 provider 名称 |
+| | `runtime_get_metadata(key) -> string` | 读取会话元数据 |
+| | `runtime_set_metadata(key, value)` | 写入会话元数据 |
+| | `runtime_set_model_config(json)` | 替换模型（provider/model_id/api_key/base_url） |
+| | `runtime_set_system_prompts(json)` | 覆盖系统提示词 |
+| | `runtime_set_max_turns(n)` | 覆盖最大轮次 |
 
 完整示例见 `examples/plugin/`。Rust SDK：`plugin/pdk/rust/`。
 
@@ -437,19 +524,22 @@ pub extern "C" fn openagent_on_stage(event_json: &str) {
 | `examples/observer/` | Pipeline 观测器 |
 | `examples/delegate/` | Agent 作为工具委托 |
 | `examples/sandbox/` | 原生沙箱工具 |
-| `examples/plugin/` | WASM 工具 + 观测器插件 |
+| `examples/plugin/` | WASM 工具、观测器、定时任务插件 |
 | `examples/skill/` | 按需加载技能 |
 | `examples/acp/` | ACP agent 协议（server + client） |
 | `examples/artifact/` | 结果策略 — 大型工具结果落盘 |
 | `examples/browser-agent/` | 基于 Playwright MCP 的浏览器 agent |
 | `examples/mcp-client/` | MCP 客户端示例（IaC 流水线） |
+| `examples/frontend/` | Vue.js 前端控制面板（频道状态、设置、二维码渲染） |
 | `cmd/cli/` | 完整 CLI，含 WASM 插件运行时 |
+| `cmd/tui/` | TUI 聊天客户端（bubbletea v2，流式输出，人工审批） |
 
 ## 包
 
 | 包 | 用途 |
 |----|------|
 | `openagent` | 核心类型 — Agent（纯配置）、Team、ToolResult、token 辅助 |
+| `agent/` | Agent 配置构建器 — 选项、目标指令、子 agent 路由 |
 | `kernel/` | Runtime — 8 节点执行引擎（记忆 → 提示词 → 守卫 → 模型 → 守卫 → 策略 → 工具 → 存储） |
 | `execution/` | 工具执行 — 并行任务、重试、流式、结果策略 |
 | `governance/` | 审批策略引擎 — 规则 → 安全 → 记忆 → 人工，持久化决策 |
@@ -462,26 +552,36 @@ pub extern "C" fn openagent_on_stage(event_json: &str) {
 | `slash/` | Slash 命令注册表和分发 |
 | `summarizer/` | 基于 LLM 的增量对话压缩 |
 | `session/` | 会话存储接口 + token 预算压缩 |
-| `session/sqlite/` | SQLite 会话存储 |
+| `session/sqlite/` | SQLite 会话存储（FTS5 全文索引） |
 | `session/file/` | 文件会话存储 |
-| `provider/memory/` | 持久知识后端（sqlite、file） |
+| `provider/memory/` | 持久知识后端（sqlite 向量检索、file） |
 | `provider/skill/` | 按需技能匹配/加载 |
 | `provider/resource/` | 外部参考资料 |
 | `provider/openviking/` | OpenViking 上下文数据库客户端（memory/skill/resource 走 HTTP） |
-| `model/openai/` | OpenAI ChatCompletion + 流式 |
+| `model/openai/` | OpenAI ChatCompletion + 流式 + 向量嵌入 |
+| `embedder/` | 嵌入后端 — BGE（离线 ONNX Runtime）和 OpenAI 兼容 API |
 | `tokenizer/` | tiktoken 模型感知 token 计数（超长文本抽样估算） |
 | `sandbox/native/` | OS 级进程隔离（bwrap/Seatbelt） |
 | `eventbus/` | 会话级发布订阅（SSE） |
-| `plugin/wasmhost/` | 共享 WASM host 模块（keyring、HTTP、日志、utc_now） |
+| `plugin/wasmhost/` | 共享 WASM host 模块（keyring、HTTP、文件系统、env、日志、runtime） |
 | `plugin/agent/wasm/` | Agent 级 WASM 插件宿主 |
 | `plugin/cli/` | CLI 插件管理和类型 |
-| `plugin/cli/wasm/` | CLI 级 WASM 运行时、加载器、observer hub |
-| `plugin/pdk/rust/` | Rust SDK crate，用于构建 WASM 插件 |
+| `plugin/cli/wasm/` | CLI 级 WASM 运行时、加载器、observer hub、HTTP 路由分发 |
+| `plugin/pdk/rust/` | Rust SDK crate（`openagent-pdk`），用于构建 WASM 插件 |
 | `skill/fs/` | 文件系统技能加载器 |
 | `mcp/` | Model Context Protocol 客户端 |
 | `guard/llm/` | 基于 LLM 的输入/输出守卫 |
 | `hooks/otel/` | OpenTelemetry 钩子 |
 | `hooks/slog/` | 结构化日志钩子 |
+| `hooks/redact/` | 工具结果中脱敏环境变量值 |
 | `tool/` | 内置工具 (shell, read, write, ls, grep, edit, websearch, webfetch, ACP fs, ACP terminal) |
-| `channel/` | IM 平台适配器 — 飞书 WebSocket、卡片渲染 |
-| `cmd/cli/` | CLI 运行时、WASM 宿主、Rust SDK 示例 |
+| `channel/` | IM 平台适配器 — 飞书（WebSocket、卡片渲染）、个人微信（ilinkai HTTP）、企业微信（长连接流式） |
+| `keyring/` | 系统密钥环封装（Linux Secret Service/kernel keyring、macOS Keychain、Windows Credential Manager） |
+| `process/` | 后台 shell 进程生命周期管理（跟踪、持久化输出、跨轮次终止） |
+| `scheduler/` | WASM 插件定时任务的 Cron 调度器 |
+| `utils/` | 共享工具 — SSRF 加固 HTTP 客户端、路径校验、flock、JSON |
+| `iac/` | Terraform 封装 — 二进制安装/镜像管理、init/plan/apply/destroy |
+| `version/` | 编译时二进制标识（名称 + 版本，经 ldflags 注入） |
+| `cmd/cli/` | CLI 运行时、WASM 宿主、REST/ACP 服务、设置、频道管理 |
+| `cmd/tui/` | TUI 聊天客户端（bubbletea v2） |
+| `cmd/mcp/` | IaC MCP 服务 — 云部署工具（华为云、阿里云），走 MCP stdio |
