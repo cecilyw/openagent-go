@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
+	"github.com/yusheng-g/openagent-go/kernel"
 )
 
 // SetupLog configures slog + log package output. Writes to a rotated log
@@ -56,6 +57,8 @@ func SetupLog(cfg config.LogConfig) (func(), error) {
 
 func parseLevel(s string) slog.Level {
 	switch strings.ToLower(s) {
+	case "trace":
+		return kernel.LevelTrace
 	case "debug":
 		return slog.LevelDebug
 	case "warn", "warning":

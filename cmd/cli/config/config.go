@@ -235,7 +235,9 @@ type LogConfig struct {
 	// MaxAge is the maximum age in days to keep rotated files. Default: 30.
 	MaxAge int `json:"max_age,omitempty"`
 	// Level filters log messages below this threshold. Default: "info".
-	// Valid: "debug", "info", "warn", "error".
+	// Valid: "trace", "debug", "info", "warn", "error". "trace" enables
+	// prompt dumps (every message sent to the model — content included,
+	// which may contain user data and secrets).
 	Level string `json:"level,omitempty"`
 }
 

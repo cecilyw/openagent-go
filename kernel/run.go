@@ -194,6 +194,24 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 		req := rt.buildModelRequest(session, prompt)
 		lastReq = req
 
+		// Trace: dump the exact request sent to the model — every message's
+		// content — for debugging prompt construction. Trace level keeps
+		// it out of normal logs (enable via settings log.level=trace);
+		// prompt content may include user data and secrets, hence the
+		// explicit opt-in level.
+		slog.Log(ctx, LevelTrace, "model request detail", "model", req.Model, "messages", len(req.Messages), "tools", len(req.Tools))
+		for i, m := range req.Messages {
+			slog.Log(ctx, LevelTrace, "  message",
+				"i", i,
+				"role", m.Role,
+				"content", m.Content,
+				"reasoning", m.ReasoningContent,
+				"tool_calls", len(m.ToolCalls),
+				"tool_call_id", m.ToolCallID,
+				"name", m.Name,
+			)
+		}
+
 		// ④ Model call. The stage wraps the whole call — retries and
 		// streaming included — so the observed duration is the real
 		// model latency of the turn.
