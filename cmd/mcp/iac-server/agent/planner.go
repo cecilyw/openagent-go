@@ -944,7 +944,11 @@ Return JSON:
 		Hooks:          sloghooks.New(slog.Default()),
 	})
 
-	session := openagent.Session{ID: "query"}
+	// Unique session per query: query_cloud has no deployment_id to scope
+	// memory by, so a fixed session ID would accumulate conversation history
+	// across calls until the prompt exceeds the model's context window.
+	// A unique ID isolates each query's memory, keeping the prompt bounded.
+	session := openagent.Session{ID: sessionID(fmt.Sprintf("query-%d", time.Now().UnixNano()))}
 	progress("Querying cloud resources...", 1, 2)
 	result, err := rt.Run(ctx, session, openagent.UserMessage(query))
 	if err != nil {

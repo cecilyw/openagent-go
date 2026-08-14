@@ -240,8 +240,17 @@ func (m *JobManager) Submit(ctx context.Context, deploymentID, tool string, fn f
 // Get returns the job's current state, or nil if it does not exist.
 // When wait > 0, it long-polls: blocks until the job finishes or the wait
 // elapses, then returns the latest state (clients poll less often).
+//
+// While polling, the job's latest progress (message/cur/tot written by the
+// running job goroutine) is forwarded to the caller via the ProgressFunc in
+// ctx. This lets MCP clients render live progress during get_job_result's
+// wait instead of staring at a blocked call — the async submit tool already
+// returned, so this polling request is the only live MCP request the client
+// associates with the work.
 func (m *JobManager) Get(ctx context.Context, id string, wait time.Duration) (*Job, error) {
+	progress := openagent.ProgressFromContext(ctx)
 	deadline := time.Now().Add(wait)
+	var lastMsg string
 	for {
 		job, err := m.load(id)
 		if err != nil {
@@ -249,6 +258,12 @@ func (m *JobManager) Get(ctx context.Context, id string, wait time.Duration) (*J
 		}
 		if job == nil {
 			return nil, nil
+		}
+		// Forward progress to the client whenever the job's progress message
+		// changes (avoids spamming the same notification every 500ms).
+		if progress != nil && job.Status == JobRunning && job.ProgressMsg != "" && job.ProgressMsg != lastMsg {
+			lastMsg = job.ProgressMsg
+			progress(job.ProgressMsg, job.ProgressCur, job.ProgressTot)
 		}
 		if job.Status != JobRunning || wait <= 0 || time.Now().After(deadline) {
 			return job, nil

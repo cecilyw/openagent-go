@@ -1,7 +1,9 @@
 // iac-server is a cloud IaC MCP server. It exposes the deployment tools over
 // MCP stdio so any MCP client (Claude Code, opencode, Cursor, openagent) can
 // plan, update, estimate cost, apply, troubleshoot, and destroy cloud
-// infrastructure, and query existing cloud resources/bills.
+// infrastructure, and query existing cloud resources/bills. When --port (or
+// IAC_PORT) is given, it additionally serves MCP over HTTP on
+// 127.0.0.1:<port> for external tool access.
 //
 // Configuration is via environment variables:
 //
@@ -12,6 +14,7 @@
 //	IAC_HOME       iac-server home (default: ~/.openagent/mcp/iac-server)
 //	              skills + deployments live under $IAC_HOME/<cloud>/
 //	IAC_DRY_RUN    "true" = simulate, don't call terraform binary
+//	IAC_PORT        HTTP listen port — setting this enables HTTP alongside stdio
 //	TF_BINARY_MIRRORS   comma-separated terraform binary download mirror URLs
 //	TF_PROVIDER_MIRRORS comma-separated provider mirror URLs or local paths
 //
@@ -28,11 +31,15 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -56,6 +63,23 @@ import (
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// ── HTTP port (optional, for external tool access) ──
+	// --port or IAC_PORT enables HTTP on 127.0.0.1:<port> alongside stdio.
+	// Neither given = pure stdio (backward compatible).
+	fs := flag.NewFlagSet("iac-server", flag.ContinueOnError)
+	portFlag := fs.Int("port", 0, "HTTP listen port (enables HTTP alongside stdio for external tool access)")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		fatal(err)
+	}
+	httpPort := 0
+	if *portFlag > 0 {
+		httpPort = *portFlag
+	} else if envPort := os.Getenv("IAC_PORT"); envPort != "" {
+		if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
+			httpPort = p
+		}
+	}
 
 	// ── Logging ──
 	// Write logs to a file (stderr is captured by the MCP client and only
@@ -224,6 +248,36 @@ func main() {
 		fatal(err)
 	}
 
+	// ── HTTP transport (optional, for external tool access) ──
+	// Listen before starting the goroutine so a bind failure is fatal
+	// immediately rather than silently leaving HTTP unavailable while
+	// stdio continues. stdio remains the primary transport — the process
+	// lifetime follows stdin (Run blocks the main goroutine).
+	//
+	// DNS rebinding protection is disabled because external tools may
+	// forward requests with a non-loopback Host header; authentication
+	// is the external tool's responsibility.
+	if httpPort > 0 {
+		addr := fmt.Sprintf("127.0.0.1:%d", httpPort)
+		handler := mcpsdk.NewStreamableHTTPHandler(
+			func(r *http.Request) *mcpsdk.Server { return server.Inner() },
+			&mcpsdk.StreamableHTTPOptions{
+				DisableLocalhostProtection: true,
+			},
+		)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			fatal(fmt.Errorf("http listen %s: %w", addr, err))
+		}
+		slog.Info("starting HTTP transport", "addr", addr)
+		go func() {
+			if err := http.Serve(ln, handler); err != nil {
+				fatal(fmt.Errorf("http serve: %w", err))
+			}
+		}()
+	}
+
+	// ── stdio transport (always; process lifetime follows stdin) ──
 	slog.Info("starting iac-server on stdio")
 	if err := server.Run(ctx, &mcpsdk.StdioTransport{}); err != nil {
 		fatal(err)

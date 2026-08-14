@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -549,9 +550,12 @@ func (t *getJobResultTool) Definition() openagent.FunctionDefinition {
 		Description: "Poll the result of an async job started by propose_architecture, specify_resources, generate_terraform_plan, " +
 			"update_deployment, estimate_cost, troubleshoot_deployment, or query_cloud. " +
 			"Those tools return immediately with a job_id; call this with that job_id to retrieve the outcome. " +
-			"Returns {status: \"running\"|\"done\"|\"failed\", progress_msg, outputs (the server LLM text), result, error}. " +
+			"Returns {status: \"running\"|\"done\"|\"failed\", progress_msg, progress_cur, progress_tot, outputs, result, error}. " +
 			"wait_seconds (0-60) blocks up to that long and returns as soon as the job finishes — " +
-			"pass a value comfortably below your client's tool-call timeout to poll efficiently.",
+			"pass a value comfortably below your client's tool-call timeout to poll efficiently. " +
+			"IMPORTANT: when status is \"running\" and progress_msg is non-empty, you MUST tell the user the current progress " +
+			"(progress_msg, progress_cur/progress_tot) before calling get_job_result again. Do not poll silently — the user " +
+			"should see what the server is doing while they wait.",
 		Parameters: openagent.SchemaOf[GetJobResultParams](),
 	}
 }
@@ -559,7 +563,13 @@ func (t *getJobResultTool) Definition() openagent.FunctionDefinition {
 func (t *getJobResultTool) Execute(ctx context.Context, args json.RawMessage) *openagent.ToolResult {
 	params, err := openagent.ParseArgs[GetJobResultParams](args)
 	if err != nil {
-		return openagent.ErrorResult(fmt.Errorf("get_job_result: %w", err), false, "")
+		// Some client LLMs send wait_seconds as a string ("60") instead of an
+		// int (60). json.Unmarshal rejects that, so retry with a manual
+		// coercion before giving up — the field is otherwise valid.
+		params, err = parseJobResultParamsLenient(args)
+		if err != nil {
+			return openagent.ErrorResult(fmt.Errorf("get_job_result: %w", err), false, "")
+		}
 	}
 	wait := time.Duration(params.WaitSeconds) * time.Second
 	if wait < 0 || wait > 60*time.Second {
@@ -696,6 +706,36 @@ type GetDeploymentStatusParams struct {
 type GetJobResultParams struct {
 	JobID       string `json:"job_id" jsonschema:"description=Job ID returned by an async tool call"`
 	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"description=Block up to this many seconds (0-60) and return as soon as the job finishes; 0 returns immediately"`
+}
+
+// parseJobResultParamsLenient parses get_job_result args, tolerating a string
+// wait_seconds (some client LLMs emit "60" instead of 60). It unmarshals into
+// a raw map, coerces wait_seconds if needed, then re-marshals and parses
+// normally.
+func parseJobResultParamsLenient(args json.RawMessage) (GetJobResultParams, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(args, &raw); err != nil {
+		return GetJobResultParams{}, err
+	}
+	if ws, ok := raw["wait_seconds"]; ok {
+		var s string
+		if err := json.Unmarshal(ws, &s); err == nil {
+			n, err := strconv.Atoi(s)
+			if err != nil {
+				return GetJobResultParams{}, fmt.Errorf("get_job_result: wait_seconds string %q is not a valid int", s)
+			}
+			raw["wait_seconds"], _ = json.Marshal(n)
+		}
+	}
+	fixed, err := json.Marshal(raw)
+	if err != nil {
+		return GetJobResultParams{}, err
+	}
+	var p GetJobResultParams
+	if err := json.Unmarshal(fixed, &p); err != nil {
+		return GetJobResultParams{}, err
+	}
+	return p, nil
 }
 
 // QueryCloudParams are the arguments to query_cloud.
