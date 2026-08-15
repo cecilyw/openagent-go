@@ -148,7 +148,11 @@ func applyContextProviders(cfg *config.Config, deps *kernel.Deps) error {
 		return fmt.Errorf("openviking: %w", err)
 	}
 	if cp.Memory != "builtin" {
-		deps.MemoryProvider = openviking.NewMemory(client)
+		deps.MemoryProvider = openviking.NewMemoryWithRecall(client, openviking.RecallConfig{
+			Quotas:   cfg.OpenViking.Recall.Quotas,
+			MaxChars: cfg.OpenViking.Recall.MaxChars,
+			MinScore: cfg.OpenViking.Recall.MinScore,
+		})
 	}
 	if cp.Skill != "builtin" {
 		deps.SkillProvider = openviking.NewSkill(client, nil)

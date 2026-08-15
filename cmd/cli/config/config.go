@@ -50,8 +50,27 @@ type ContextProviderConfig struct {
 // OpenVikingConfig connects to an OpenViking server (direct HTTP API —
 // search/remember/read, no SDK).
 type OpenVikingConfig struct {
-	Endpoint string `json:"endpoint,omitempty"` // e.g. "http://127.0.0.1:1933"
-	APIKey   string `json:"api_key,omitempty"`   // Bearer token; empty = no auth
+	Endpoint string       `json:"endpoint,omitempty"` // e.g. "http://127.0.0.1:1933"
+	APIKey   string       `json:"api_key,omitempty"`   // Bearer token; empty = no auth
+	Recall   RecallConfig `json:"recall,omitempty"`
+}
+
+// RecallConfig controls OpenViking's type-quota memory recall endpoint
+// (POST /api/v1/search/recall). The endpoint searches memory subtrees
+// independently by type then renders a bounded context block — without
+// quotas the recall can return empty or irrelevant results.
+//
+// Quotas caps how many items each memory type contributes. A zero value
+// disables that type. Keys: "events", "entities", "preferences",
+// "experiences". Empty = server defaults (events=10, entities=10,
+// preferences=3, experiences=0).
+//
+// MaxChars bounds the rendered output size. MinScore filters low-relevance
+// hits. Both empty = server defaults (6500 / 0.1).
+type RecallConfig struct {
+	Quotas   map[string]int `json:"quotas,omitempty"`
+	MaxChars int            `json:"max_chars,omitempty"`
+	MinScore float64        `json:"min_score,omitempty"`
 }
 
 // EmbeddingConfig selects the semantic-embedding backend for knowledge
