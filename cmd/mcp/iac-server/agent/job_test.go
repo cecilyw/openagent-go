@@ -16,7 +16,7 @@ import (
 
 func TestJobManager_BasicDone(t *testing.T) {
 	m := NewJobManager(t.TempDir())
-	id, err := m.Submit(context.Background(), "", "test", func(ctx context.Context) (string, error) {
+	id, err := m.Submit(context.Background(), "", "", "test", func(ctx context.Context) (string, error) {
 		return `{"ok":true}`, nil
 	})
 	if err != nil {
@@ -36,7 +36,7 @@ func TestJobManager_BasicDone(t *testing.T) {
 
 func TestJobManager_Failure(t *testing.T) {
 	m := NewJobManager(t.TempDir())
-	id, _ := m.Submit(context.Background(), "", "test", func(ctx context.Context) (string, error) {
+	id, _ := m.Submit(context.Background(), "", "", "test", func(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("boom")
 	})
 	job, _ := m.Get(context.Background(), id, 5*time.Second)
@@ -50,7 +50,7 @@ func TestJobManager_Failure(t *testing.T) {
 
 func TestJobManager_PanicRecovery(t *testing.T) {
 	m := NewJobManager(t.TempDir())
-	id, _ := m.Submit(context.Background(), "", "test", func(ctx context.Context) (string, error) {
+	id, _ := m.Submit(context.Background(), "", "", "test", func(ctx context.Context) (string, error) {
 		panic("kaboom")
 	})
 	job, _ := m.Get(context.Background(), id, 5*time.Second)
@@ -68,13 +68,13 @@ func TestJobManager_Supersession(t *testing.T) {
 
 	// job1: blocks until we release the barrier
 	barrier := make(chan struct{})
-	id1, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id1, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		<-barrier
 		return `{"job":1}`, nil
 	})
 
 	// job2 for same dep: should supersede job1
-	id2, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id2, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		return `{"job":2}`, nil
 	})
 
@@ -105,6 +105,57 @@ func TestJobManager_Supersession(t *testing.T) {
 	}
 }
 
+// TestJobManager_CrossSessionReject verifies that a second session operating
+// on the same deployment is rejected rather than silently superseding the
+// first session's job. Same-session retry still supersedes (tested above).
+func TestJobManager_CrossSessionReject(t *testing.T) {
+	m := NewJobManager(t.TempDir())
+	dep := "d-cross-session"
+
+	// Session A starts a long-running job.
+	barrier := make(chan struct{})
+	idA, err := m.Submit(context.Background(), dep, "session-A", "test", func(ctx context.Context) (string, error) {
+		<-barrier
+		return `{"session":"A"}`, nil
+	})
+	if err != nil {
+		t.Fatalf("session A submit: %v", err)
+	}
+
+	// Session B tries the same deployment — must be rejected.
+	_, err = m.Submit(context.Background(), dep, "session-B", "test", func(ctx context.Context) (string, error) {
+		return `{"session":"B"}`, nil
+	})
+	if err == nil {
+		t.Fatal("session B should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("error should mention busy, got: %s", err)
+	}
+
+	// Session A retrying (same session ID) should supersede its own prior job.
+	idA2, err := m.Submit(context.Background(), dep, "session-A", "test", func(ctx context.Context) (string, error) {
+		return `{"session":"A-retry"}`, nil
+	})
+	if err != nil {
+		t.Fatalf("session A retry submit: %v", err)
+	}
+
+	// Original job A should be cancelled (superseded by A retry).
+	jobA, _ := m.Get(context.Background(), idA, 2*time.Second)
+	if jobA.Status != JobCancelled {
+		t.Fatalf("job A should be cancelled by same-session retry, got %s", jobA.Status)
+	}
+
+	close(barrier)
+
+	// A retry should complete.
+	jobA2, _ := m.Get(context.Background(), idA2, 5*time.Second)
+	if jobA2.Status != JobDone {
+		t.Fatalf("job A retry should be done, got %s", jobA2.Status)
+	}
+}
+
 // TestJobManager_SupersessionDoneOverwritesCancelled_Bug is an adversarial
 // reproduction of the done()-overwrites-cancelled bug. It deterministically
 // forces the superseded job's fn to return nil error AFTER cancelLocked has
@@ -116,13 +167,13 @@ func TestJobManager_SupersessionDoneOverwritesCancelled_Bug(t *testing.T) {
 	// job1's fn blocks on a channel we control, then returns nil error
 	// (the done path — the one without a JobCancelled guard).
 	release := make(chan struct{})
-	id1, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id1, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		<-release
 		return `{"job":1}`, nil
 	})
 
 	// job2 supersedes job1 — cancelLocked writes Status=cancelled to disk.
-	id2, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id2, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		return `{"job":2}`, nil
 	})
 	if id1 == id2 {
@@ -162,7 +213,7 @@ func TestJobManager_ConcurrencyLimit(t *testing.T) {
 	// Submit maxConcurrentJobs+1 jobs with distinct deployments (no supersession).
 	for i := 0; i < maxConcurrentJobs+1; i++ {
 		dep := "d-" + string(rune('a'+i))
-		_, _ = m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+		_, _ = m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 			cur := atomic.AddInt32(&active, 1)
 			for {
 				old := atomic.LoadInt32(&maxActive)
@@ -209,7 +260,7 @@ func TestJobManager_ConcurrencyLimit(t *testing.T) {
 func TestJobManager_PersistenceAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	m1 := NewJobManager(dir)
-	id, _ := m1.Submit(context.Background(), "", "test", func(ctx context.Context) (string, error) {
+	id, _ := m1.Submit(context.Background(), "", "", "test", func(ctx context.Context) (string, error) {
 		return `{"persist":true}`, nil
 	})
 	job, _ := m1.Get(context.Background(), id, 5*time.Second)
@@ -233,7 +284,7 @@ func TestJobManager_PersistenceAcrossRestart(t *testing.T) {
 
 func TestJobManager_LongPoll(t *testing.T) {
 	m := NewJobManager(t.TempDir())
-	id, _ := m.Submit(context.Background(), "", "test", func(ctx context.Context) (string, error) {
+	id, _ := m.Submit(context.Background(), "", "", "test", func(ctx context.Context) (string, error) {
 		time.Sleep(200 * time.Millisecond)
 		return `{"done":true}`, nil
 	})
@@ -246,7 +297,7 @@ func TestJobManager_LongPoll(t *testing.T) {
 
 func TestJobManager_OutputTruncation(t *testing.T) {
 	m := NewJobManager(t.TempDir())
-	id, _ := m.Submit(context.Background(), "", "test", func(ctx context.Context) (string, error) {
+	id, _ := m.Submit(context.Background(), "", "", "test", func(ctx context.Context) (string, error) {
 		sink := JobOutputsFromContext(ctx)
 		if sink == nil {
 			t.Fatal("output sink should be in ctx")
@@ -329,7 +380,7 @@ func TestJobManager_OrphanedRunningJobAfterCrash(t *testing.T) {
 func TestJobManager_AppliedJobNotResumedOnRestart(t *testing.T) {
 	dir := t.TempDir()
 	m1 := NewJobManager(dir)
-	id, _ := m1.Submit(context.Background(), "", "test", func(ctx context.Context) (string, error) {
+	id, _ := m1.Submit(context.Background(), "", "", "test", func(ctx context.Context) (string, error) {
 		return `{"ok":true}`, nil
 	})
 	j1, _ := m1.Get(context.Background(), id, 5*time.Second)
@@ -433,7 +484,7 @@ func TestJobManager_HighConcurrentDistinctDeployments(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			dep := fmt.Sprintf("d-%03d", i)
-			id, err := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+			id, err := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 				time.Sleep(10 * time.Millisecond) // simulate work
 				return `{}`, nil
 			})
@@ -467,7 +518,7 @@ func TestCancelLocked_DoesNotOverwriteDone(t *testing.T) {
 	dep := "d-done-then-supersede"
 
 	// job1 completes successfully (done).
-	id1, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id1, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		return `{"result":"ok"}`, nil
 	})
 	job1, _ := m.Get(context.Background(), id1, 5*time.Second)
@@ -477,7 +528,7 @@ func TestCancelLocked_DoesNotOverwriteDone(t *testing.T) {
 
 	// job2 supersedes job1 — but job1 is already done. cancelLocked must
 	// NOT overwrite job1's status to cancelled.
-	id2, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id2, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		return `{}`, nil
 	})
 	if id1 == id2 {
@@ -503,7 +554,7 @@ func TestCancelLocked_DoesNotOverwriteFailed(t *testing.T) {
 	m := NewJobManager(t.TempDir())
 	dep := "d-failed-then-supersede"
 
-	id1, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id1, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("terraform plan failed: provider not found")
 	})
 	job1, _ := m.Get(context.Background(), id1, 5*time.Second)
@@ -512,7 +563,7 @@ func TestCancelLocked_DoesNotOverwriteFailed(t *testing.T) {
 	}
 	wantErr := job1.Error
 
-	id2, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id2, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		return `{}`, nil
 	})
 	_, _ = m.Get(context.Background(), id2, 5*time.Second)
@@ -537,14 +588,14 @@ func TestRunningMap_ReclaimedAfterDone(t *testing.T) {
 	dep := "d-reclaim"
 
 	// job1 completes.
-	id1, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id1, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		return `{}`, nil
 	})
 	_, _ = m.Get(context.Background(), id1, 5*time.Second)
 
 	// job2 for the same dep: since job1's entry was reclaimed, there is no
 	// prev to cancel. job1 should still be done (not clobbered).
-	id2, _ := m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+	id2, _ := m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 		return `{}`, nil
 	})
 	_, _ = m.Get(context.Background(), id2, 5*time.Second)
@@ -566,7 +617,7 @@ func TestRunningMap_NoUnboundedGrowth(t *testing.T) {
 	var done int32
 	for i := 0; i < N; i++ {
 		dep := fmt.Sprintf("d-%03d", i)
-		_, _ = m.Submit(context.Background(), dep, "test", func(ctx context.Context) (string, error) {
+		_, _ = m.Submit(context.Background(), dep, "", "test", func(ctx context.Context) (string, error) {
 			return `{}`, nil
 		})
 	}
@@ -639,7 +690,7 @@ func BenchmarkJobManager_ConcurrentSubmit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		dep := fmt.Sprintf("d-%d", i%100) // 100 distinct deployments
 		atomic.AddInt32(&pending, 1)
-		_, err := m.Submit(context.Background(), dep, "bench", func(ctx context.Context) (string, error) {
+		_, err := m.Submit(context.Background(), dep, "", "bench", func(ctx context.Context) (string, error) {
 			defer atomic.AddInt32(&pending, -1)
 			return `{}`, nil
 		})
@@ -669,7 +720,7 @@ func BenchmarkJobManager_SupersededSubmit(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		atomic.AddInt32(&pending, 1)
-		_, err := m.Submit(context.Background(), "d-same", "bench", func(ctx context.Context) (string, error) {
+		_, err := m.Submit(context.Background(), "d-same", "", "bench", func(ctx context.Context) (string, error) {
 			defer atomic.AddInt32(&pending, -1)
 			select {
 			case <-release:
@@ -703,7 +754,7 @@ func BenchmarkJobManager_ParallelSubmit(b *testing.B) {
 		for pb.Next() {
 			atomic.AddInt32(&pending, 1)
 			dep := fmt.Sprintf("d-%d", i%50)
-			_, err := m.Submit(context.Background(), dep, "bench", func(ctx context.Context) (string, error) {
+			_, err := m.Submit(context.Background(), dep, "", "bench", func(ctx context.Context) (string, error) {
 				defer atomic.AddInt32(&pending, -1)
 				return `{}`, nil
 			})

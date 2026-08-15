@@ -10,12 +10,14 @@
 // actual work in a background goroutine.
 //
 // Jobs persist to <workDir>/jobs/job-<id>.json so a server restart does
-// not lose them. Same-deployment jobs supersede: a new submission for a
-// deployment cancels any running job for that deployment (the cancelled
-// job's fn may still be mid-execution — it checks ctx.Err() and returns an
-// interrupted error, but saveDag/saveCost are ctx-unaware so they complete
-// their atomic write before the goroutine exits). Different deployments run
-// in parallel, bounded by a global semaphore.
+// not lose them. Same-deployment jobs from the same MCP session supersede:
+// a new submission from that session cancels any running job for that
+// deployment (the cancelled job's fn may still be mid-execution — it checks
+// ctx.Err() and returns an interrupted error, but saveDag/saveCost are
+// ctx-unaware so they complete their atomic write before the goroutine
+// exits). Cross-session requests for the same deployment are rejected so
+// the second client gets an error instead of silently cancelling the first.
+// Different deployments run in parallel, bounded by a global semaphore.
 package agent
 
 import (
@@ -77,8 +79,9 @@ type Job struct {
 // runningJob tracks a job that has been submitted, with its cancel handle
 // so a newer submission for the same deployment can supersede it.
 type runningJob struct {
-	job    *Job
-	cancel context.CancelFunc
+	job       *Job
+	cancel    context.CancelFunc
+	sessionID string
 }
 
 // JobManager owns job lifecycle: submission, progress, persistence, and
@@ -166,14 +169,23 @@ func (m *JobManager) cleanupStale() {
 // callback (writing to the job file) and a 15-minute deadline; panics are
 // recovered into a failed job.
 //
-// When deploymentID is non-empty, a new submission supersedes any running
-// job for that deployment: the prior job's context is cancelled (so its fn
-// observes ctx.Err() and returns an interrupted error) and is marked
-// cancelled. The new job then acquires the global semaphore and runs. The
-// prior job's goroutine may still be mid-saveDag/saveCost when cancelled —
-// those writes are atomic (tmp+rename) and ctx-unaware, so they complete
-// before the goroutine exits, preventing half-written dag.json/cost.json.
-func (m *JobManager) Submit(ctx context.Context, deploymentID, tool string, fn func(ctx context.Context) (string, error)) (string, error) {
+// When deploymentID is non-empty, the submission is checked against any
+// running job for that deployment:
+//   - Same session (same sessionID): the prior job is superseded — its context
+//     is cancelled so the client's retry acts on the latest request instead of
+//     queueing behind a stale run.
+//   - Different session: the submission is rejected with an error, so the
+//     second client learns the deployment is busy instead of silently
+//     cancelling the first client's work.
+//
+// The sessionID is the MCP session ID (empty for stdio, unique per HTTP
+// connection). An empty deploymentID (propose_architecture, query_cloud) is
+// stateless and bypasses this check entirely.
+//
+// The superseded job's goroutine may still be mid-saveDag/saveCost when
+// cancelled — those writes are atomic (tmp+rename) and ctx-unaware, so they
+// complete before the goroutine exits, preventing half-written files.
+func (m *JobManager) Submit(ctx context.Context, deploymentID, sessionID, tool string, fn func(ctx context.Context) (string, error)) (string, error) {
 	job := &Job{
 		ID:           fmt.Sprintf("job-%d", time.Now().UnixNano()),
 		Tool:         tool,
@@ -189,18 +201,30 @@ func (m *JobManager) Submit(ctx context.Context, deploymentID, tool string, fn f
 	// The submit request's ctx is cancelled when the tool call returns
 	// (which is immediate for async jobs) — the job runs on its own
 	// context, bounded only by JobTimeout, and can be superseded by a
-	// newer submission for the same deployment.
+	// newer same-session submission for the same deployment.
 	runCtx, cancel := context.WithTimeout(context.Background(), JobTimeout)
 
-	// Supersede any prior job for the same deployment: cancel it so the
-	// client's retry/submit always acts on the latest request instead of
-	// queueing behind a stale run. The superseded job reports cancelled.
+	// Register in the running map so done()/fail() can reclaim the cancel
+	// handle (releasing the WithTimeout timer). For non-empty deploymentID,
+	// this also enforces supersede/reject semantics. For empty deploymentID
+	// (propose_architecture, query_cloud), the entry is purely for timer
+	// cleanup — there is no deployment state to conflict over.
 	m.mu.Lock()
-	if prev, ok := m.running[deploymentID]; ok {
-		prev.cancel()
-		m.cancelLocked(prev.job)
+	if deploymentID != "" {
+		if prev, ok := m.running[deploymentID]; ok {
+			if prev.sessionID == sessionID {
+				// Same client retrying: supersede the prior job.
+				prev.cancel()
+				m.cancelLocked(prev.job)
+			} else {
+				// Different client: reject to avoid silent cancellation.
+				m.mu.Unlock()
+				cancel()
+				return "", fmt.Errorf("deployment %q is busy — another session is operating on it; wait for that operation to finish or use a different deployment", deploymentID)
+			}
+		}
 	}
-	m.running[deploymentID] = &runningJob{job: job, cancel: cancel}
+	m.running[deploymentID] = &runningJob{job: job, cancel: cancel, sessionID: sessionID}
 	m.mu.Unlock()
 
 	go func() {
