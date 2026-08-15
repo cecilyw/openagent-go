@@ -5,6 +5,7 @@ import (
 
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
 	"github.com/yusheng-g/openagent-go/kernel"
+	openviking "github.com/yusheng-g/openagent-go/provider/openviking"
 )
 
 // TestApplyContextProviders_EndpointSwitchesAll: a configured OpenViking
@@ -26,6 +27,25 @@ func TestApplyContextProviders_EndpointSwitchesAll(t *testing.T) {
 	}
 	if deps.ResourceProvider == nil {
 		t.Error("resource provider not switched to openviking")
+	}
+	// A bare endpoint (no explicit recall config) still gets the
+	// provider defaults — the provider is the single source of truth.
+	if mem, ok := deps.MemoryProvider.(*openviking.Memory); ok {
+		rc := mem.RecallConfig()
+		if rc.MaxChars != 6500 {
+			t.Errorf("recall max_chars = %d, want 6500", rc.MaxChars)
+		}
+		if rc.MinScore != 0.1 {
+			t.Errorf("recall min_score = %v, want 0.1", rc.MinScore)
+		}
+		if rc.Quotas["events"] != 10 {
+			t.Errorf("recall events quota = %d, want 10", rc.Quotas["events"])
+		}
+		if rc.Quotas["preferences"] != 3 {
+			t.Errorf("recall preferences quota = %d, want 3", rc.Quotas["preferences"])
+		}
+	} else {
+		t.Errorf("memory provider is %T, want *openviking.Memory", deps.MemoryProvider)
 	}
 }
 
@@ -65,3 +85,40 @@ func TestApplyContextProviders_NoEndpoint(t *testing.T) {
 		t.Error("no endpoint must leave all providers nil (local)")
 	}
 }
+
+// TestApplyContextProviders_CustomRecallConfig: a user-configured recall
+// config overrides the defaults and propagates to the provider.
+func TestApplyContextProviders_CustomRecallConfig(t *testing.T) {
+	cfg := &config.Config{
+		OpenViking: config.OpenVikingConfig{
+			Endpoint: "http://127.0.0.1:1933",
+			Recall: config.RecallConfig{
+				Quotas:   map[string]int{"events": 5, "entities": 5, "preferences": 2, "experiences": 1},
+				MaxChars: 4000,
+				MinScore: 0.25,
+			},
+		},
+	}
+	var deps kernel.Deps
+	if err := applyContextProviders(cfg, &deps); err != nil {
+		t.Fatal(err)
+	}
+	mem, ok := deps.MemoryProvider.(*openviking.Memory)
+	if !ok {
+		t.Fatalf("memory provider is %T, want *openviking.Memory", deps.MemoryProvider)
+	}
+	rc := mem.RecallConfig()
+	if rc.MaxChars != 4000 {
+		t.Errorf("recall max_chars = %d, want 4000", rc.MaxChars)
+	}
+	if rc.MinScore != 0.25 {
+		t.Errorf("recall min_score = %v, want 0.25", rc.MinScore)
+	}
+	if rc.Quotas["events"] != 5 {
+		t.Errorf("recall events quota = %d, want 5", rc.Quotas["events"])
+	}
+	if rc.Quotas["experiences"] != 1 {
+		t.Errorf("recall experiences quota = %d, want 1", rc.Quotas["experiences"])
+	}
+}
+

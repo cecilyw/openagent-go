@@ -187,6 +187,59 @@ func (c *Client) Search(ctx context.Context, query string, limit int, contextTyp
 	return items, nil
 }
 
+// ── Recall ──
+
+// recallRequest mirrors the POST /api/v1/search/recall request body.
+type recallRequest struct {
+	Query    string         `json:"query"`
+	Quotas   map[string]int `json:"quotas,omitempty"`
+	MaxChars int            `json:"max_chars,omitempty"`
+	MinScore float64        `json:"min_score,omitempty"`
+	Render   bool           `json:"render"`
+}
+
+// recallEntry is one hit in the recall response.
+type recallEntry struct {
+	URI      string  `json:"uri,omitempty"`
+	Score    float64 `json:"score,omitempty"`
+	Type     string  `json:"type,omitempty"`     // events | entities | preferences | experiences
+	Mode     string  `json:"mode,omitempty"`     // full | summary | uri
+	Origin   string  `json:"origin,omitempty"`   // actor_peer | self | other_peer
+	Content  string  `json:"content,omitempty"`
+	Summary  string  `json:"summary,omitempty"`
+	Abstract string  `json:"abstract,omitempty"`
+	Rank     int     `json:"rank,omitempty"`
+}
+
+// recallResult mirrors the /api/v1/search/recall response result.
+type recallResult struct {
+	Entries  []recallEntry `json:"entries,omitempty"`
+	Rendered string        `json:"rendered,omitempty"`
+	Stats    map[string]any `json:"stats,omitempty"`
+}
+
+// Recall runs the server's type-quota memory recall endpoint
+// (POST /api/v1/search/recall). Unlike Search, which does a flat semantic
+// lookup, Recall searches memory subtrees independently by type
+// (events/entities/preferences/experiences), applies per-type quotas, and
+// returns a bounded context block. The caller is responsible for
+// supplying non-zero cfg values (the provider's RecallConfig defaults
+// handle this).
+func (c *Client) Recall(ctx context.Context, query string, cfg RecallConfig) (recallResult, error) {
+	req := recallRequest{
+		Query:    query,
+		Quotas:   cfg.Quotas,
+		MaxChars: cfg.MaxChars,
+		MinScore: cfg.MinScore,
+		Render:   false,
+	}
+	var res recallResult
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/recall", nil, req, &res); err != nil {
+		return recallResult{}, fmt.Errorf("openviking recall: %w", err)
+	}
+	return res, nil
+}
+
 // ── ListSkills ──
 
 // SkillEntry is one skill in the GET /api/v1/skills catalog listing.
