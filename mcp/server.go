@@ -64,8 +64,11 @@ func (s *Server) AddTool(tool openagent.Tool) error {
 	// If the client supplied a progressToken, a [ProgressFunc] is built from
 	// the server session and injected into the context so the tool can stream
 	// progress notifications back to the client during long-running calls.
+	// The session ID is also injected so tools can distinguish same-client
+	// retries from cross-client conflicts on shared resources.
 	handler := func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 		ctx = withProgress(ctx, req)
+		ctx = withSessionID(ctx, req)
 		output := tool.Execute(ctx, req.Params.Arguments)
 		if output.Error != nil {
 			return &mcpsdk.CallToolResult{
@@ -128,6 +131,7 @@ func (s *Server) AddToolWithSchema(tool openagent.Tool, inputSchema json.RawMess
 
 	handler := func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 		ctx = withProgress(ctx, req)
+		ctx = withSessionID(ctx, req)
 		output := tool.Execute(ctx, req.Params.Arguments)
 		if output.Error != nil {
 			return &mcpsdk.CallToolResult{
@@ -146,6 +150,34 @@ func (s *Server) AddToolWithSchema(tool openagent.Tool, inputSchema json.RawMess
 
 	s.inner.AddTool(mcpTool, handler)
 	return nil
+}
+
+// withSessionID injects the MCP server session ID into ctx so tools can
+// distinguish same-client retries from cross-client conflicts. The session
+// ID is empty for stdio (single client) and unique per HTTP connection.
+func withSessionID(ctx context.Context, req *mcpsdk.CallToolRequest) context.Context {
+	if req.Session != nil {
+		return WithSessionID(ctx, req.Session.ID())
+	}
+	return ctx
+}
+
+// sessionIDKey is the context key for the MCP session ID (Mcp-Session-Id
+// header). Empty for stdio (single client), unique per HTTP connection.
+// withSessionID injects it; SessionIDFromContext extracts it.
+type sessionIDKey struct{}
+
+// WithSessionID returns a context that carries the MCP session ID.
+// An empty sessionID is valid (stdio transport) and means "single client".
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDKey{}, sessionID)
+}
+
+// SessionIDFromContext extracts the MCP session ID from ctx, or "" if none
+// was set (e.g. stdio transport, or a call outside an MCP server).
+func SessionIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(sessionIDKey{}).(string)
+	return id
 }
 
 // Run starts the MCP server on the given transport. It blocks until the

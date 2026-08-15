@@ -46,5 +46,6 @@ description: HuaweiCloud OBS API guide. 94 APIs covering 多段操作, 对象操
 
 ## Usage
 
-Use `http_request` to call these APIs. SDK-HMAC-SHA256 signing is automatic — do NOT pass credentials.
-Use `read`/`grep`/`ls` to browse `references/` for detailed request/response schemas.
+NOTE: In sandbox/developer-space environments, OBS endpoints (obs.*.myhuaweicloud.com) resolve to internal addresses and use S3-compatible signing that http_request does not support. To query OBS resources (buckets, objects), use the Config (RMS) service instead: load_skill("huaweicloud-config") and call CollectAllResourcesSummary with resource_type "obs.buckets".
+
+The API definitions below are for reference only — direct http_request calls to OBS endpoints will fail.

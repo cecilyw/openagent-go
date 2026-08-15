@@ -26,6 +26,7 @@ import (
 	"github.com/yusheng-g/openagent-go/agent"
 	"github.com/yusheng-g/openagent-go/cmd/mcp/iac-server/provider"
 	ctxpkg "github.com/yusheng-g/openagent-go/context"
+	"github.com/yusheng-g/openagent-go/mcp"
 	sloghooks "github.com/yusheng-g/openagent-go/hooks/slog"
 	"github.com/yusheng-g/openagent-go/iac"
 	"github.com/yusheng-g/openagent-go/kernel"
@@ -94,11 +95,12 @@ func ctxProgress(ctx context.Context) openagent.ProgressFunc {
 }
 
 // SubmitJob runs fn as an async job and returns the job id immediately.
-// Same-deployment jobs serialize; fn's ctx has the 15-min deadline and a
-// progress callback that writes to the job file. The mcp layer wraps the
-// long-running Planner methods with this.
+// Same-deployment jobs from the same session supersede (client retry);
+// cross-session requests for the same deployment are rejected. fn's ctx has
+// the 15-min deadline and a progress callback that writes to the job file.
+// The mcp layer wraps the long-running Planner methods with this.
 func (p *Planner) SubmitJob(ctx context.Context, deploymentID, tool string, fn func(ctx context.Context) (string, error)) (string, error) {
-	return p.jobs.Submit(ctx, deploymentID, tool, fn)
+	return p.jobs.Submit(ctx, deploymentID, mcp.SessionIDFromContext(ctx), tool, fn)
 }
 
 // GetJob returns the current state of an async job (nil if unknown).
@@ -209,7 +211,20 @@ Return JSON:
 
 	progress("Analyzing deployment request...", 1, 2)
 	session := openagent.Session{ID: sessionID(depID)}
-	result, err := rt.Run(ctx, session, openagent.UserMessage(request))
+	msg := openagent.UserMessage(request)
+	var result *openagent.RunResult
+	for attempt := 0; attempt < 3; attempt++ {
+		result, err = rt.Run(ctx, session, msg)
+		if err != nil {
+			_ = os.RemoveAll(dir)
+			return "", fmt.Errorf("propose_architecture: LLM run (attempt %d): %w", attempt+1, err)
+		}
+		if hasJSONObject(result.FinalOutput) {
+			break
+		}
+		// Empty or non-JSON output — retry with a nudge.
+		msg = nudgeMessage("Your previous response was empty or not valid JSON. Output the JSON result as specified in the system prompt.")
+	}
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("propose_architecture: LLM run: %w", err)
@@ -218,7 +233,7 @@ Return JSON:
 	raw := extractJSON(result.FinalOutput)
 	if raw == "" {
 		_ = os.RemoveAll(dir)
-		return "", fmt.Errorf("propose_architecture: LLM returned empty output (FinalOutput=%q)", result.FinalOutput)
+		return "", fmt.Errorf("propose_architecture: LLM returned empty output after 3 attempts (last FinalOutput=%q)", result.FinalOutput)
 	}
 
 	var arch struct {
@@ -363,14 +378,26 @@ or, when you need more input:
 		userMsg += "\n\nUser adjustments: " + adjustments
 	}
 
-	result, err := rt.Run(ctx, session, openagent.UserMessage(userMsg))
+	msg := openagent.UserMessage(userMsg)
+	var result *openagent.RunResult
+	for attempt := 0; attempt < 3; attempt++ {
+		result, err = rt.Run(ctx, session, msg)
+		if err != nil {
+			return "", fmt.Errorf("specify_resources: LLM run (attempt %d): %w", attempt+1, err)
+		}
+		if hasJSONObject(result.FinalOutput) {
+			break
+		}
+		// Empty or non-JSON output — retry with a nudge.
+		msg = nudgeMessage("Your previous response was empty or not valid JSON. Output the JSON result as specified in the system prompt.")
+	}
 	if err != nil {
 		return "", fmt.Errorf("specify_resources: LLM run: %w", err)
 	}
 
 	raw := extractJSON(result.FinalOutput)
 	if raw == "" {
-		return "", fmt.Errorf("specify_resources: LLM returned empty output (FinalOutput=%q)", result.FinalOutput)
+		return "", fmt.Errorf("specify_resources: LLM returned empty output after 3 attempts (last FinalOutput=%q)", result.FinalOutput)
 	}
 
 	var spec struct {
@@ -549,8 +576,10 @@ Return JSON:
 			Reasoning string            `json:"reasoning"`
 		}
 		raw := extractJSON(result.FinalOutput)
-		if raw == "" {
-			return "", fmt.Errorf("generate_terraform_plan: LLM returned empty output (attempt %d, FinalOutput=%q)", attempt+1, result.FinalOutput)
+		if raw == "" || !strings.HasPrefix(raw, "{") {
+			// Empty or non-JSON output — retry with a nudge instead of failing.
+			msg = nudgeMessage("Your previous response was empty or not valid JSON. Output the JSON result with .tf files as specified in the system prompt.")
+			continue
 		}
 		if err := json.Unmarshal([]byte(raw), &llmOutput); err != nil {
 			return "", fmt.Errorf("generate_terraform_plan: parse (attempt %d): %w (raw=%q)", attempt+1, err, raw)
@@ -1067,6 +1096,25 @@ func extractJSON(s string) string {
 		return s
 	}
 	return s[start : end+1]
+}
+
+// hasJSONObject reports whether s contains an extractable JSON object.
+// Used to decide whether an LLM response is usable or should be retried:
+// extractJSON returns the raw string when no braces are found, so a plain-text
+// refusal ("I cannot help") would otherwise pass the non-empty check.
+func hasJSONObject(s string) bool {
+	extracted := extractJSON(s)
+	return strings.HasPrefix(extracted, "{") && strings.HasSuffix(extracted, "}")
+}
+
+// nudgeMessage returns a transient user message that prompts the LLM to retry
+// after an empty or non-JSON response. Transient=true prevents the nudge from
+// being persisted to the shared session store, so downstream steps (specify,
+// generate, estimate) do not read retry artifacts into their prompts.
+func nudgeMessage(text string) openagent.Message {
+	m := openagent.UserMessage(text)
+	m.Transient = true
+	return m
 }
 
 // marshalResult marshals a planResult to JSON string.

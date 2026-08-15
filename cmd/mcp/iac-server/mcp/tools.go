@@ -58,7 +58,7 @@ func NewTools(cfg Config) []openagent.Tool {
 // jobStarted renders the immediate response of an async tool call: the
 // client polls get_job_result with the returned job_id.
 func jobStarted(jobID, tool string) *openagent.ToolResult {
-	content := fmt.Sprintf(`{"job_id": %q, "status": "started", "tool": %q, "hint": "call get_job_result with job_id to poll for completion (wait_seconds up to 60 to block)"}`, jobID, tool)
+	content := fmt.Sprintf(`{"job_id": %q, "status": "started", "tool": %q, "hint": "call get_job_result with job_id to poll for completion (wait_seconds up to 120 to block)"}`, jobID, tool)
 	return &openagent.ToolResult{Content: content}
 }
 
@@ -551,7 +551,7 @@ func (t *getJobResultTool) Definition() openagent.FunctionDefinition {
 			"update_deployment, estimate_cost, troubleshoot_deployment, or query_cloud. " +
 			"Those tools return immediately with a job_id; call this with that job_id to retrieve the outcome. " +
 			"Returns {status: \"running\"|\"done\"|\"failed\", progress_msg, progress_cur, progress_tot, outputs, result, error}. " +
-			"wait_seconds (0-60) blocks up to that long and returns as soon as the job finishes — " +
+			"wait_seconds (0-120) blocks up to that long and returns as soon as the job finishes — " +
 			"pass a value comfortably below your client's tool-call timeout to poll efficiently. " +
 			"IMPORTANT: when status is \"running\" and progress_msg is non-empty, you MUST tell the user the current progress " +
 			"(progress_msg, progress_cur/progress_tot) before calling get_job_result again. Do not poll silently — the user " +
@@ -572,8 +572,8 @@ func (t *getJobResultTool) Execute(ctx context.Context, args json.RawMessage) *o
 		}
 	}
 	wait := time.Duration(params.WaitSeconds) * time.Second
-	if wait < 0 || wait > 60*time.Second {
-		return openagent.ErrorResult(fmt.Errorf("get_job_result: wait_seconds must be 0-60"), false, "")
+	if wait < 0 || wait > 120*time.Second {
+		return openagent.ErrorResult(fmt.Errorf("get_job_result: wait_seconds must be 0-120"), false, "")
 	}
 	job, err := t.cfg.Planner.GetJob(ctx, params.JobID, wait)
 	if err != nil {
@@ -705,7 +705,7 @@ type GetDeploymentStatusParams struct {
 // GetJobResultParams are the arguments to get_job_result.
 type GetJobResultParams struct {
 	JobID       string `json:"job_id" jsonschema:"description=Job ID returned by an async tool call"`
-	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"description=Block up to this many seconds (0-60) and return as soon as the job finishes; 0 returns immediately"`
+	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"description=Block up to this many seconds (0-120) and return as soon as the job finishes; 0 returns immediately"`
 }
 
 // parseJobResultParamsLenient parses get_job_result args, tolerating a string

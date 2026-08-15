@@ -188,8 +188,8 @@ func installViaHCInstall(ctx context.Context, ver, destDir string) (string, erro
 func EnsureTerraform(ctx context.Context, cfg Config) (string, error) {
 	// 1. Explicit path.
 	if cfg.BinaryPath != "" {
-		if _, err := os.Stat(cfg.BinaryPath); err != nil {
-			return "", fmt.Errorf("binary not found at %s: %w", cfg.BinaryPath, err)
+		if err := validateBinaryPath(cfg.BinaryPath); err != nil {
+			return "", fmt.Errorf("binary at %s: %w", cfg.BinaryPath, err)
 		}
 		return cfg.BinaryPath, nil
 	}
@@ -216,7 +216,34 @@ func EnsureTerraform(ctx context.Context, cfg Config) (string, error) {
 		}
 		return "", err
 	}
+	if err := validateBinaryPath(installPath); err != nil {
+		return "", fmt.Errorf("terraform install at %s: %w", installPath, err)
+	}
 	return installPath, nil
+}
+
+// validateBinaryPath checks that path is a regular file and its parent is a
+// directory. This catches the "file where a directory was expected" (or vice
+// versa) mismatch that produces a bare OS "not a directory" error at exec
+// time, translating it into a clear message before the binary is handed to
+// fork/exec.
+func validateBinaryPath(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("expected a binary file but found a directory — remove it and reinstall")
+	}
+	parent := filepath.Dir(path)
+	pInfo, err := os.Stat(parent)
+	if err != nil {
+		return fmt.Errorf("parent dir: %w", err)
+	}
+	if !pInfo.IsDir() {
+		return fmt.Errorf("parent %s is not a directory — path layout is corrupted, remove the install dir and retry", parent)
+	}
+	return nil
 }
 
 // binaryName returns the cached binary filename for a version.

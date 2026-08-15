@@ -1,21 +1,24 @@
 // iac-server is a cloud IaC MCP server. It exposes the deployment tools over
-// MCP stdio so any MCP client (Claude Code, opencode, Cursor, openagent) can
+// MCP so any MCP client (Claude Code, opencode, Cursor, openagent) can
 // plan, update, estimate cost, apply, troubleshoot, and destroy cloud
-// infrastructure, and query existing cloud resources/bills. When --port (or
-// IAC_PORT) is given, it additionally serves MCP over HTTP on
-// 127.0.0.1:<port> for external tool access.
+// infrastructure, and query existing cloud resources/bills.
+//
+// Transport is mutually exclusive:
+//   - default: stdio (for IDE/agent runtime as parent process)
+//   - --port / IAC_PORT: HTTP-only on 127.0.0.1:<port> (for sandbox/container/
+//     systemd where stdin is not connected)
 //
 // Configuration is via environment variables:
 //
-//	CLOUD          cloud provider: "huaweicloud" (default), "aliyun"
-//	IAC_API_KEY    server-side LLM API key
-//	IAC_BASE_URL   server-side LLM base URL (OpenAI-compatible)
-//	IAC_MODEL      server-side LLM model ID
-//	IAC_HOME       iac-server home (default: ~/.openagent/mcp/iac-server)
-//	              skills + deployments live under $IAC_HOME/<cloud>/
-//	IAC_DRY_RUN    "true" = simulate, don't call terraform binary
-//	IAC_PORT        HTTP listen port — setting this enables HTTP alongside stdio
-//	TF_BINARY_MIRRORS   comma-separated terraform binary download mirror URLs
+//	CLOUD              cloud provider: "huaweicloud" (default), "aliyun"
+//	IAC_API_KEY        server-side LLM API key
+//	IAC_BASE_URL       server-side LLM base URL (OpenAI-compatible)
+//	IAC_MODEL          server-side LLM model ID
+//	IAC_HOME           iac-server home (default: ~/.openagent/mcp/iac-server)
+//	                   skills + deployments live under $IAC_HOME/<cloud>/
+//	IAC_DRY_RUN        "true" = simulate, don't call terraform binary
+//	IAC_PORT           HTTP listen port — switches to HTTP-only transport
+//	TF_BINARY_MIRRORS  comma-separated terraform binary download mirror URLs
 //	TF_PROVIDER_MIRRORS comma-separated provider mirror URLs or local paths
 //
 // Cloud credentials are read from the environment by the selected provider
@@ -31,6 +34,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -64,21 +68,39 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// ── HTTP port (optional, for external tool access) ──
-	// --port or IAC_PORT enables HTTP on 127.0.0.1:<port> alongside stdio.
+	// ── HTTP port (optional, switches to HTTP-only transport) ──
+	// --port or IAC_PORT switches from stdio to HTTP-only on 127.0.0.1:<port>.
 	// Neither given = pure stdio (backward compatible).
 	fs := flag.NewFlagSet("iac-server", flag.ContinueOnError)
-	portFlag := fs.Int("port", 0, "HTTP listen port (enables HTTP alongside stdio for external tool access)")
+	portFlag := fs.Int("port", 0, "HTTP listen port (switches to HTTP-only transport; stdio is not started)")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		fatal(err)
 	}
-	httpPort := 0
-	if *portFlag > 0 {
-		httpPort = *portFlag
-	} else if envPort := os.Getenv("IAC_PORT"); envPort != "" {
-		if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
-			httpPort = p
+	// portFlagSet is true only if --port was explicitly passed on the
+	// command line. fs.Visit visits exactly the flags that were set, so it
+	// distinguishes "not given" (→ stdio) from "given as 0" (→ invalid).
+	portFlagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "port" {
+			portFlagSet = true
 		}
+	})
+	httpPort := 0
+	if portFlagSet {
+		if *portFlag <= 0 {
+			fatal(fmt.Errorf("--port=%d is not a valid HTTP listen port (omit --port for stdio)", *portFlag))
+		}
+		httpPort = *portFlag
+	}
+	if envPort := os.Getenv("IAC_PORT"); envPort != "" && httpPort == 0 {
+		p, err := strconv.Atoi(envPort)
+		if err != nil {
+			fatal(fmt.Errorf("IAC_PORT %q is not a valid port number", envPort))
+		}
+		if p <= 0 {
+			fatal(fmt.Errorf("IAC_PORT %q is not a valid HTTP listen port (unset IAC_PORT for stdio)", envPort))
+		}
+		httpPort = p
 	}
 
 	// ── Logging ──
@@ -248,15 +270,10 @@ func main() {
 		fatal(err)
 	}
 
-	// ── HTTP transport (optional, for external tool access) ──
-	// Listen before starting the goroutine so a bind failure is fatal
-	// immediately rather than silently leaving HTTP unavailable while
-	// stdio continues. stdio remains the primary transport — the process
-	// lifetime follows stdin (Run blocks the main goroutine).
-	//
-	// DNS rebinding protection is disabled because external tools may
-	// forward requests with a non-loopback Host header; authentication
-	// is the external tool's responsibility.
+	// ── Transport: HTTP and stdio are mutually exclusive ──
+	// --port > 0: HTTP-only (for sandbox/container/systemd where stdin is
+	// not connected and stdio would immediately EOF, killing the process).
+	// --port = 0: stdio-only (for IDE/agent runtime as parent process).
 	if httpPort > 0 {
 		addr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 		handler := mcpsdk.NewStreamableHTTPHandler(
@@ -270,17 +287,23 @@ func main() {
 			fatal(fmt.Errorf("http listen %s: %w", addr, err))
 		}
 		slog.Info("starting HTTP transport", "addr", addr)
+		srv := &http.Server{Handler: handler}
 		go func() {
-			if err := http.Serve(ln, handler); err != nil {
+			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				fatal(fmt.Errorf("http serve: %w", err))
 			}
 		}()
-	}
-
-	// ── stdio transport (always; process lifetime follows stdin) ──
-	slog.Info("starting iac-server on stdio")
-	if err := server.Run(ctx, &mcpsdk.StdioTransport{}); err != nil {
-		fatal(err)
+		<-ctx.Done()
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelShutdown()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			fatal(fmt.Errorf("http shutdown: %w", err))
+		}
+	} else {
+		slog.Info("starting iac-server on stdio")
+		if err := server.Run(ctx, &mcpsdk.StdioTransport{}); err != nil {
+			fatal(err)
+		}
 	}
 }
 
