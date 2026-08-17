@@ -2379,8 +2379,18 @@ func (a *acpApprover) Ask(ctx context.Context, call openagent.ToolCall, def open
 	if err != nil {
 		return governance.Decision{Action: governance.Deny, Reason: "permission request failed: " + err.Error()}, nil
 	}
-	if resp.Outcome.Cancelled {
+	// Outcome is the ACP union discriminant. The spec requires it, but
+	// legacy clients predate it and send only {"optionId":"..."}; those
+	// are accepted leniently as "selected" so they keep working. An
+	// explicit "cancelled" (or an empty response with no OptionID) is
+	// denied — fail closed on ambiguous input.
+	switch resp.Outcome.Outcome {
+	case openacp.PermissionOutcomeCancelled:
 		return governance.Decision{Action: governance.Deny, Reason: "cancelled"}, nil
+	case openacp.PermissionOutcomeSelected, "":
+		// "selected" is the normal path; "" is the legacy lenient path.
+	default:
+		return governance.Decision{Action: governance.Deny, Reason: "unknown outcome: " + string(resp.Outcome.Outcome)}, nil
 	}
 	if resp.Outcome.OptionID == nil {
 		return governance.Decision{Action: governance.Deny, Reason: "no option selected"}, nil
