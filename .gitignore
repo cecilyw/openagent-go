@@ -28,6 +28,12 @@ go.work.sum
 bin/
 build/
 
+# build.sh produces the default-named binaries at the repo root.
+# A branded build (OPENAGENT_BINARY_NAME=<name>) emits <name>/<name>-tui
+# instead; those are left for the developer to clean up.
+/openagent
+/openagent-tui
+
 # WASM plugin binaries (compiled from examples/plugin/)
 plugins/
 *.wasm
