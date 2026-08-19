@@ -96,15 +96,15 @@ func buildModels(providers map[string]config.ProviderConfig) ([]openagent.Model,
 			}
 			models = append(models, m)
 			infos = append(infos, modelReg{
-				ID:                      mc.ID,
-				Provider:                pid,
-				Model:                   m,
-				APIKey:                  apiKey,
-				BaseURL:                 p.BaseURL,
-				MaxOutputTokens:         mc.MaxOutputTokens,
-				InputCostPerToken:       mc.InputCostPerToken,
-				InputCacheCostPerToken:  mc.InputCacheCostPerToken,
-				OutputCostPerToken:      mc.OutputCostPerToken,
+				ID:                     mc.ID,
+				Provider:               pid,
+				Model:                  m,
+				APIKey:                 apiKey,
+				BaseURL:                p.BaseURL,
+				MaxOutputTokens:        mc.MaxOutputTokens,
+				InputCostPerToken:      mc.InputCostPerToken,
+				InputCacheCostPerToken: mc.InputCacheCostPerToken,
+				OutputCostPerToken:     mc.OutputCostPerToken,
 			})
 		}
 	}
@@ -112,15 +112,15 @@ func buildModels(providers map[string]config.ProviderConfig) ([]openagent.Model,
 }
 
 type modelReg struct {
-	ID                      string
-	Provider                string
-	Model                   openagent.Model
-	APIKey                  string
-	BaseURL                 string
-	MaxOutputTokens         int
-	InputCostPerToken       float64
-	InputCacheCostPerToken  float64
-	OutputCostPerToken      float64
+	ID                     string
+	Provider               string
+	Model                  openagent.Model
+	APIKey                 string
+	BaseURL                string
+	MaxOutputTokens        int
+	InputCostPerToken      float64
+	InputCacheCostPerToken float64
+	OutputCostPerToken     float64
 }
 
 func firstModel(models []openagent.Model) openagent.Model {
@@ -232,8 +232,7 @@ IMPORTANT: If the current dynamic context conflicts with earlier conversation hi
 
 // personaAndLimitsPrompt is the built-in default for SOUL.md.
 // It defines personality, tone, and behavioral boundaries.
-const personaAndLimitsPrompt = `You are openagent, a fully pluggable AI agent.
-# Persona & Limits
+const personaAndLimitsPrompt = `# Persona & Limits
 IMPORTANT: Always use the same language as the user. If the user asks in Chinese, reasoning and response in Chinese.
 IMPORTANT: Help the user complete tasks by using available tools when appropriate. Do not ask the user to perform operations that you can safely perform yourself with available tools.
 - Be concise and direct. Do not flatter, apologize excessively, or hedge.
@@ -277,12 +276,7 @@ func resolvePluginsDir() string {
 // configDir returns the configuration directory (config.Dir), with a
 // home fallback when it cannot be resolved.
 func configDir() string {
-	dir, err := config.Dir()
-	if err != nil {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".openagent")
-	}
-	return dir
+	return config.Dir()
 }
 
 // resolveProfiles reads SOUL.md, SYSTEM.md, and AGENTS.md: project-level

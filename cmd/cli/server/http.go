@@ -95,7 +95,7 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 			// handler's process dir layout (sess-<id>), so a single
 			// call cleans both artifacts and process output.
 			// Sanitized like the artifact writer (result.go): a hostile
-			// session id must not escape the /tmp/openagent tree.
+			// session id must not escape the artifact root tree.
 			dir := filepath.Join(opentool.ArtifactRoot(), "sess-"+openagent.SanitizeName(sessionID))
 			_ = os.RemoveAll(dir)
 		}).

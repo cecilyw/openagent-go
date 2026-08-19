@@ -145,16 +145,16 @@ export default async function LandingPage({
         <p className="mb-8 text-sm text-muted">{t("prereq")}</p>
 
         <h3 className="mb-2 font-semibold text-text">{t("buildTitle")}</h3>
-        <CodeBlock label="bash">{`go build -o openagent-cli ./cmd/cli/
+        <CodeBlock label="bash">{`go build -o openagent ./cmd/cli/
 
 # Show version
-./openagent-cli -v
+./openagent -v
 
 # ACP mode (stdio — for VSCode/Zed ACP plugins)
-./openagent-cli serve --acp
+./openagent serve --acp
 
 # REST mode (HTTP + SSE)
-./openagent-cli serve --port 8080`}</CodeBlock>
+./openagent serve --port 8080`}</CodeBlock>
 
         <h3 className="mb-2 mt-6 font-semibold text-text">{t("configTitle")}</h3>
         <CodeBlock label="json">{`{

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -25,12 +24,8 @@ func UpdateSettings(fn func(raw map[string]json.RawMessage) error) error {
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
 
-	p, err := Path()
-	if err != nil {
-		return fmt.Errorf("settings path: %w", err)
-	}
 	raw := map[string]json.RawMessage{}
-	if data, rerr := os.ReadFile(p); rerr == nil {
+	if data, rerr := os.ReadFile(Path()); rerr == nil {
 		if err := json.Unmarshal(data, &raw); err != nil {
 			return fmt.Errorf("settings parse: %w", err)
 		}
@@ -44,10 +39,10 @@ func UpdateSettings(fn func(raw map[string]json.RawMessage) error) error {
 	if err != nil {
 		return fmt.Errorf("settings marshal: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(Dir(), 0o755); err != nil {
 		return fmt.Errorf("settings dir: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(p), "settings-*.tmp")
+	tmp, err := os.CreateTemp(Dir(), "settings-*.tmp")
 	if err != nil {
 		return fmt.Errorf("settings temp: %w", err)
 	}
@@ -60,7 +55,7 @@ func UpdateSettings(fn func(raw map[string]json.RawMessage) error) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("settings close: %w", err)
 	}
-	if err := os.Rename(tmpName, p); err != nil {
+	if err := os.Rename(tmpName, Path()); err != nil {
 		return fmt.Errorf("settings save: %w", err)
 	}
 	return nil

@@ -14,7 +14,7 @@
 //	IAC_API_KEY        server-side LLM API key
 //	IAC_BASE_URL       server-side LLM base URL (OpenAI-compatible)
 //	IAC_MODEL          server-side LLM model ID
-//	IAC_HOME           iac-server home (default: ~/.openagent/mcp/iac-server)
+//	IAC_HOME           iac-server home (default: ~/.<version.Name>/mcp/iac-server)
 //	                   skills + deployments live under $IAC_HOME/<cloud>/
 //	IAC_DRY_RUN        "true" = simulate, don't call terraform binary
 //	IAC_PORT           HTTP listen port — switches to HTTP-only transport
@@ -62,6 +62,7 @@ import (
 	sessionsqlite "github.com/yusheng-g/openagent-go/session/sqlite"
 	skillfs "github.com/yusheng-g/openagent-go/skill/fs"
 	"github.com/yusheng-g/openagent-go/summarizer"
+	"github.com/yusheng-g/openagent-go/version"
 )
 
 func main() {
@@ -109,10 +110,10 @@ func main() {
 	iacHome := os.Getenv("IAC_HOME")
 	if iacHome == "" {
 		home, _ := os.UserHomeDir()
-		iacHome = filepath.Join(home, ".openagent", "mcp", "iac-server")
+		iacHome = filepath.Join(home, version.ConfigDirName(), "mcp", "iac-server")
 	}
 	// Create the home directory BEFORE opening the log file — O_CREATE does
-	// not create parent directories, and a fresh machine has no ~/.openagent
+	// not create parent directories, and a fresh machine has no ~/.<version.Name>
 	// tree yet (this used to crash first-run with ENOENT).
 	if err := os.MkdirAll(iacHome, 0o755); err != nil {
 		fatal(fmt.Errorf("create iac home: %w", err))

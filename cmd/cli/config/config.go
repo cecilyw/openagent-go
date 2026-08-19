@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/yusheng-g/openagent-go/version"
 )
 
 type Config struct {
@@ -51,7 +53,7 @@ type ContextProviderConfig struct {
 // search/remember/read, no SDK).
 type OpenVikingConfig struct {
 	Endpoint string       `json:"endpoint,omitempty"` // e.g. "http://127.0.0.1:1933"
-	APIKey   string       `json:"api_key,omitempty"`   // Bearer token; empty = no auth
+	APIKey   string       `json:"api_key,omitempty"`  // Bearer token; empty = no auth
 	Recall   RecallConfig `json:"recall,omitempty"`
 }
 
@@ -129,12 +131,12 @@ type ProviderConfig struct {
 // requests past 128K with no diagnostics). The cost fields feed usage
 // reporting (ACP usage_update cost). 0/absent = built-in lookup / no cost.
 type ModelConfig struct {
-	ID                      string  `json:"id"`
-	MaxInputTokens          int     `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens         int     `json:"max_output_tokens,omitempty"`
-	InputCostPerToken       float64 `json:"input_cost_per_token,omitempty"`
-	InputCacheCostPerToken  float64 `json:"input_cache_cost_per_token,omitempty"`
-	OutputCostPerToken      float64 `json:"output_cost_per_token,omitempty"`
+	ID                     string  `json:"id"`
+	MaxInputTokens         int     `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens        int     `json:"max_output_tokens,omitempty"`
+	InputCostPerToken      float64 `json:"input_cost_per_token,omitempty"`
+	InputCacheCostPerToken float64 `json:"input_cache_cost_per_token,omitempty"`
+	OutputCostPerToken     float64 `json:"output_cost_per_token,omitempty"`
 }
 
 // UnmarshalJSON accepts both the legacy string form ("gpt-4o") and the
@@ -260,16 +262,27 @@ type LogConfig struct {
 	Level string `json:"level,omitempty"`
 }
 
-// Path returns the config file path. Respects OPENAGENT_CLI_CONFIG env var.
-func Path() (string, error) {
-	if p := os.Getenv("OPENAGENT_CLI_CONFIG"); p != "" {
-		return p, nil
-	}
+// Path returns the config file path. The default config dir is
+// ~/.<version.Name> (e.g. ~/.openagent), set at build time via ldflags;
+// OPENAGENT_CLI_CONFIG overrides the settings.json location entirely.
+func Path() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
+		fmt.Fprintf(os.Stderr, "home dir: %v\n", err)
 	}
-	return filepath.Join(home, ".openagent", "settings.json"), nil
+	defaultPath := filepath.Join(home, version.ConfigDirName(), "settings.json")
+	if p := os.Getenv("OPENAGENT_CLI_CONFIG"); p != "" {
+		info, err := os.Stat(p)
+		if info != nil && info.IsDir() {
+			fmt.Fprintf(os.Stderr, "OPENAGENT_CLI_CONFIG is a dir(%v), use: %s\n", p, defaultPath)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "OPENAGENT_CLI_CONFIG err: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Use: %s\n", defaultPath)
+		}
+		return p
+	}
+	return defaultPath
 }
 
 // Dir returns the configuration directory — the directory that contains
@@ -277,23 +290,14 @@ func Path() (string, error) {
 // path (profile, plugins, channel state) derives from this single root,
 // so pointing OPENAGENT_CLI_CONFIG at a custom settings file relocates
 // the whole working set with it.
-func Dir() (string, error) {
-	p, err := Path()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Dir(p), nil
+func Dir() string {
+	return filepath.Dir(Path())
 }
 
 // DefaultPluginsDir returns the default plugins directory under the
-// configuration directory. Falls back to ~/.openagent/plugins when the
-// config dir cannot be resolved.
+// configuration directory.
 func DefaultPluginsDir() string {
-	if dir, err := Dir(); err == nil {
-		return filepath.Join(dir, "plugins")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".openagent", "plugins")
+	return filepath.Join(Dir(), "plugins")
 }
 
 // ApplyDefaults fills zero-value fields with the built-in defaults. It is
@@ -303,11 +307,7 @@ func DefaultPluginsDir() string {
 // resolves via Path().
 func ApplyDefaults(cfg *Config, settingsPath string) {
 	if settingsPath == "" {
-		settingsPath, _ = Path()
-	}
-	if settingsPath == "" {
-		home, _ := os.UserHomeDir()
-		settingsPath = filepath.Join(home, ".openagent", "settings.json")
+		settingsPath = Path()
 	}
 	if cfg.Provider == nil {
 		cfg.Provider = make(map[string]ProviderConfig)
@@ -319,7 +319,7 @@ func ApplyDefaults(cfg *Config, settingsPath string) {
 		cfg.Server.Port = 8080
 	}
 	if cfg.Log.File == "" {
-		cfg.Log.File = filepath.Join(filepath.Dir(settingsPath), "logs", "openagent.log")
+		cfg.Log.File = filepath.Join(filepath.Dir(settingsPath), "logs", fmt.Sprintf("%s.log", version.SafeName()))
 	}
 	if cfg.Log.MaxSize == 0 {
 		cfg.Log.MaxSize = 10
@@ -338,11 +338,7 @@ func ApplyDefaults(cfg *Config, settingsPath string) {
 func Load(path string) (*Config, error) {
 	p := path
 	if p == "" {
-		p, _ = Path()
-	}
-	if p == "" {
-		home, _ := os.UserHomeDir()
-		p = filepath.Join(home, ".openagent", "settings.json")
+		p = Path()
 	}
 	cfg := &Config{}
 	ApplyDefaults(cfg, p)

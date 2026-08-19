@@ -1,4 +1,4 @@
-// telemetry — openagent-cli observer plugin using the high-level Plugin trait.
+// telemetry — openagent observer plugin using the high-level Plugin trait.
 
 #![no_std]
 

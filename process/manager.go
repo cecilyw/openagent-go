@@ -1,16 +1,6 @@
 // Package process provides lifecycle management for background shell processes
 // started by the shell tool. A Manager tracks running processes, persists their
 // stdout/stderr to disk, and allows the model to monitor or kill them across turns.
-//
-//	// Per-session creation (REST / ACP):
-//	pm, _ := process.NewManager(filepath.Join(cwd, ".openagent", "proc"))
-//	defer pm.Cleanup()
-//	ctx = process.WithManager(ctx, pm)
-//
-//	// In shell tool:
-//	pm := process.FromContext(ctx)
-//	proc, _ := pm.Create("npm run build")
-//	// pass proc.StdoutW / proc.StderrW to sandbox.Command
 package process
 
 import (

@@ -25,7 +25,7 @@ func RunCLI(ctx context.Context, cfg *config.Config, message string) error {
 	models, _ := buildModels(cfg.Provider)
 	m := firstModel(models)
 	if m == nil {
-		return fmt.Errorf("no models configured. Please add a provider in ~/.openagent/settings.json")
+		return fmt.Errorf("no models configured. Please add a provider in %s", config.Path())
 	}
 
 	// 2. Memory + knowledge (same wiring as RunACP/RunREST).

@@ -1,4 +1,4 @@
-// openagent-cli — openagent-go CLI.
+// openagent — openagent-go CLI.
 
 package main
 
@@ -30,10 +30,7 @@ func main() {
 	log.SetFlags(0)
 
 	// 1. Paths.
-	cfgPath, err := config.Path()
-	if err != nil {
-		log.Fatalf("config path: %v", err)
-	}
+	cfgPath := config.Path()
 	pluginPaths := []string{config.DefaultPluginsDir()}
 
 	// 2. Read settings.json.
@@ -241,7 +238,7 @@ func parseArgRule(rule string) cobra.PositionalArgs {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "openagent-cli",
+	Use:   version.Name,
 	Short: "openagent CLI",
 }
 
@@ -363,12 +360,12 @@ func buildRunCmd(cfg config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run <message>",
 		Short: "Send a message and stream the response",
-		Long: `Send a message to the AI Agent and stream the response to stdout in real time.
+		Long: fmt.Sprintf(`Send a message to the AI Agent and stream the response to stdout in real time.
 
 Wrap your message in quotes when it contains spaces:
-  openagent-cli run "analyze main.go"`,
-		Example: `  openagent-cli run "Hello, introduce yourself briefly"
-  openagent-cli run "analyze cmd/cli/main.go and summarize"`,
+  %s run "analyze main.go"`, version.Name),
+		Example: fmt.Sprintf(`  %s run "Hello, introduce yourself briefly"
+  %s run "analyze cmd/cli/main.go and summarize"`, version.Name, version.Name),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return server.RunCLI(cmd.Context(), &cfg, args[0])

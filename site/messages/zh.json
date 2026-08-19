@@ -19,14 +19,14 @@
     "mentalModel": "Agent 是纯配置。kernel.Runtime 是 7-stage 主循环，通过依赖注入串联独立顶层包。多智能体有三种形态：SubAgent（同步 as-tool 委派）、Team（transfer_to_* 控制权交接）、Orchestrate（LLM 规划 DAG、并行执行）。IM 渠道是进程级守护——agent 逻辑不变，渠道只是另一种传输。",
     "heroStack": ["Go 1.26", "ACP v1", "WASM", "wazero"],
     "terminal": {
-      "title": "openagent-cli — zsh",
+      "title": "openagent — zsh",
       "lines": [
-        { "type": "cmd", "text": "openagent-cli serve --acp" },
+        { "type": "cmd", "text": "openagent serve --acp" },
         { "type": "ok", "text": "ACP v1 服务就绪（stdio，VSCode/Zed）" },
-        { "type": "cmd", "text": "openagent-cli run \"介绍一下你自己\"" },
+        { "type": "cmd", "text": "openagent run \"介绍一下你自己\"" },
         { "type": "out", "text": "→ 我是 openagent-go，一个可插拔的多智能体框架..." },
         { "type": "ok", "text": "完成（1 轮，312 token）" },
-        { "type": "cmd", "text": "openagent-cli serve --channel feishu" },
+        { "type": "cmd", "text": "openagent serve --channel feishu" },
         { "type": "out", "text": "二维码 → 扫码创建机器人" },
         { "type": "ok", "text": "飞书已连接（WebSocket，卡片流式）" },
         { "type": "comment", "text": "# 也可：--channel wechat（长轮询）/ wecom（流式）" }
@@ -89,10 +89,10 @@
     "configTitle": "配置",
     "firstRunTitle": "首次运行",
     "firstRun": [
-      "构建 CLI：go build -o openagent-cli ./cmd/cli/",
+      "构建 CLI：go build -o openagent ./cmd/cli/",
       "创建 ~/.openagent/settings.json，配置 provider（api_key + models）。",
       "可选：在 ~/.openagent/profile/ 放 AGENTS.md（工作规则）和 SOUL.md（人设）。",
-      "运行 ./openagent-cli serve --acp（ACP 客户端，VSCode/Zed）或 --port 8080（REST + SSE）。",
+      "运行 ./openagent serve --acp（ACP 客户端，VSCode/Zed）或 --port 8080（REST + SSE）。",
       "开关能力：--guard on、--approver on、--sandbox（OS 级沙箱）。",
       "把 .wasm 文件放进 ~/.openagent/plugins/——按类型自动加载。"
     ]
@@ -229,7 +229,7 @@
               "name": "Session",
               "desc": "三种模式：auto（工具立即执行）、manual（每个非只读工具需审批）、plan（执行前 plan_create/plan_update）。会话状态在 SessionStore。",
               "chips": ["auto", "manual", "plan"],
-              "example": "./openagent-cli serve --acp\n# 模式经 /mode 或 session/set_mode 设置\n# settings.json 的 default_mode"
+              "example": "./openagent serve --acp\n# 模式经 /mode 或 session/set_mode 设置\n# settings.json 的 default_mode"
             }
           ]
         },
@@ -304,7 +304,7 @@
               "name": "IM 渠道",
               "desc": "三种平台，统一 channel.Channel 接口。飞书：WebSocket + Schema 2.0 交互卡片（折叠面板、工具调用卡片、审批按钮、/mode），patch 流式。微信：ilinkai HTTP 长轮询，纯文本一次性回复（无卡片 API），CDN 媒体。企微：WebSocket + 原生流式（消息原地增长），template_card 审批。进程级守护；--channel 或 POST /connect 启动。",
               "chips": ["飞书", "微信", "企微", "流式"],
-              "example": "./openagent-cli serve --channel feishu\n# 扫码 → 创建机器人，保存凭据\n# 进程级：前端只触发/观察\n# /clear /mode（飞书）slash 命令"
+              "example": "./openagent serve --channel feishu\n# 扫码 → 创建机器人，保存凭据\n# 进程级：前端只触发/观察\n# /clear /mode（飞书）slash 命令"
             },
             {
               "name": "Plan 模式",
@@ -322,7 +322,7 @@
               "name": "沙箱",
               "desc": "OS 原生约束 shell/文件/网络。Linux：bubblewrap（bwrap）——新 mount namespace，系统路径只读，workspace 可写，--die-with-parent；PID namespace 特意不 unshare（让 model 能 kill 进程）。macOS：sandbox-exec + Seatbelt profile。Windows：未实现（unconfined + 警告）。网络隔离可选（--sandbox + network:isolated）。",
               "chips": ["bwrap", "seatbelt", "namespace", "fail-open"],
-              "example": "./openagent-cli serve --sandbox --port 8080\n# bwrap: --ro-bind /usr, --bind /workspace\n# --unshare-net（若 network=isolated）\n# bwrap 缺失 → unconfined + 警告"
+              "example": "./openagent serve --sandbox --port 8080\n# bwrap: --ro-bind /usr, --bind /workspace\n# --unshare-net（若 network=isolated）\n# bwrap 缺失 → unconfined + 警告"
             }
           ]
         }

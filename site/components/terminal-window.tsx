@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
 // 仿 macOS 终端窗口——标题栏（红黄绿三圆点 + 标题）+ 暗底 monospace 内容。
-// 内容是静态 openagent-cli 会话演示（纯文字，不跑真命令）。hero 的视觉锚点：
+// 内容是静态 openagent 会话演示（纯文字，不跑真命令）。hero 的视觉锚点：
 // 开发者一眼认出"这是个 CLI 工具"。prompt $ 用绿，输出浅灰，✓ 状态绿。
 //
 // 行类型：cmd（带绿色 $ 前缀）、ok（绿 ✓ 前缀）、out（纯输出灰）、comment（# 注释灰）。

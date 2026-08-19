@@ -3,7 +3,7 @@
 //
 // Pattern:
 //  1. RunHooks.OnToolEnd intercepts every tool result
-//  2. If result > threshold, write to /tmp/openagent/<sessionID>/<tool>_<ts>.txt
+//  2. If result > threshold, write to <tool.ArtifactRoot()>/<sessionID>/<tool>_<ts>.txt
 //  3. Replace *result with a short message pointing to the file
 //  4. Model calls read/grep on that path to inspect the output
 //

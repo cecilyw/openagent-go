@@ -17,12 +17,13 @@ import (
 	"github.com/hashicorp/hc-install/product"
 	"github.com/hashicorp/hc-install/releases"
 	"github.com/hashicorp/hc-install/src"
+	oaversion "github.com/yusheng-g/openagent-go/version"
 )
 
 // defaultInstallDir is where downloaded terraform binaries are cached.
 func defaultInstallDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".openagent", "bin")
+	return filepath.Join(home, oaversion.ConfigDirName(), "bin")
 }
 
 // Detect looks for an existing terraform binary in PATH.

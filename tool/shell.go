@@ -30,7 +30,7 @@ import (
 //	read <stdout.log>      — check latest output
 //	shell kill <PID>        — kill the process
 //
-// Process output files live under /tmp/openagent/sess-<session-id>/proc-<pid>/
+// Process output files live under <ArtifactRoot()>/sess-<session-id>/proc-<pid>/
 // and are cleaned up on session deletion.
 //
 // Implements both [openagent.Tool] and [openagent.StreamExecutor].

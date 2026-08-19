@@ -992,7 +992,7 @@ func (s *AgentServer) OnNewSession(ctx context.Context, req openacp.NewSessionRe
 
 	// Create per-session process manager for long-running shell commands.
 	if cwd != "" { // require cwd but put files in /tmp
-		pm, err := process.NewManager(filepath.Join(os.TempDir(), "openagent", "sess-"+string(id)))
+		pm, err := process.NewManager(filepath.Join(opentool.ArtifactRoot(), "sess-"+string(id)))
 		if err == nil {
 			ss.processMgr = pm
 		}
@@ -1044,7 +1044,7 @@ func (s *AgentServer) OnLoadSession(ctx context.Context, req openacp.LoadSession
 
 		// Create per-session process manager for long-running shell commands.
 		if cwd != "" {
-			pm, err := process.NewManager(filepath.Join(os.TempDir(), "openagent", "sess-"+string(req.SessionID)))
+			pm, err := process.NewManager(filepath.Join(opentool.ArtifactRoot(), "sess-"+string(req.SessionID)))
 			if err == nil {
 				ss.processMgr = pm
 			}
@@ -1191,7 +1191,7 @@ func (s *AgentServer) OnResumeSession(ctx context.Context, req openacp.ResumeSes
 
 		// Create per-session process manager for shell tool background processes.
 		if cwd != "" {
-			pm, err := process.NewManager(filepath.Join(os.TempDir(), "openagent", "sess-"+string(req.SessionID)))
+			pm, err := process.NewManager(filepath.Join(opentool.ArtifactRoot(), "sess-"+string(req.SessionID)))
 			if err == nil {
 				ss.processMgr = pm
 			}
@@ -2498,7 +2498,6 @@ func finishReasonToACP(finishReason string) openacp.StopReason {
 type planModeStub struct {
 	def openagent.FunctionDefinition
 }
-
 
 func (p planModeStub) Definition() openagent.FunctionDefinition {
 	return p.def

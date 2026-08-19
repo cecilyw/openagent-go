@@ -19,14 +19,14 @@
     "mentalModel": "Agent is pure configuration. kernel.Runtime is a 7-stage mainline loop wiring independent top-level packages via DI. Multi-agent comes in three shapes: SubAgent (sync as-tool delegation), Team (transfer_to_* control handoff), Orchestrate (LLM-planned DAG, parallel execution). IM channels are process-level daemons — the agent runs the same; the channel is just another transport.",
     "heroStack": ["Go 1.26", "ACP v1", "WASM", "wazero"],
     "terminal": {
-      "title": "openagent-cli — zsh",
+      "title": "openagent — zsh",
       "lines": [
-        { "type": "cmd", "text": "openagent-cli serve --acp" },
+        { "type": "cmd", "text": "openagent serve --acp" },
         { "type": "ok", "text": "ACP v1 server ready on stdio (VSCode/Zed)" },
-        { "type": "cmd", "text": "openagent-cli run \"introduce yourself\"" },
+        { "type": "cmd", "text": "openagent run \"introduce yourself\"" },
         { "type": "out", "text": "→ I'm openagent-go, a pluggable multi-agent framework..." },
         { "type": "ok", "text": "done (1 turn, 312 tokens)" },
-        { "type": "cmd", "text": "openagent-cli serve --channel feishu" },
+        { "type": "cmd", "text": "openagent serve --channel feishu" },
         { "type": "out", "text": "QR code → scan to provision bot" },
         { "type": "ok", "text": "feishu connected (WebSocket, card streaming)" },
         { "type": "comment", "text": "# also: --channel wechat (long-poll) / wecom (stream)" }
@@ -89,10 +89,10 @@
     "configTitle": "Configure",
     "firstRunTitle": "First run",
     "firstRun": [
-      "Build the CLI: go build -o openagent-cli ./cmd/cli/",
+      "Build the CLI: go build -o openagent ./cmd/cli/",
       "Create ~/.openagent/settings.json with a provider (api_key + models).",
       "Optionally place AGENTS.md (working rules) and SOUL.md (persona) in ~/.openagent/profile/.",
-      "Run ./openagent-cli serve --acp for an ACP client (VSCode/Zed), or --port 8080 for REST + SSE.",
+      "Run ./openagent serve --acp for an ACP client (VSCode/Zed), or --port 8080 for REST + SSE.",
       "Toggle capabilities: --guard on, --approver on, --sandbox for OS-level confinement.",
       "Drop .wasm files in ~/.openagent/plugins/ — they auto-load by type."
     ]
@@ -229,7 +229,7 @@
               "name": "Session",
               "desc": "Three modes: auto (tools execute immediately), manual (each non-readonly tool asks approval), plan (plan_create/plan_update before execution). Per-session state in SessionStore.",
               "chips": ["auto", "manual", "plan"],
-              "example": "./openagent-cli serve --acp\n# mode set via /mode or session/set_mode\n# default_mode in settings.json"
+              "example": "./openagent serve --acp\n# mode set via /mode or session/set_mode\n# default_mode in settings.json"
             }
           ]
         },
@@ -304,7 +304,7 @@
               "name": "IM channels",
               "desc": "Three platforms via one channel.Channel interface. Feishu: WebSocket + Schema 2.0 interactive cards (collapsible panels, tool-call cards, approval buttons, /mode), patch-based streaming. WeChat: ilinkai HTTP long-poll, plain-text one-shot replies (no card API), CDN media. WeCom: WebSocket + native streaming (message grows in place), template_card approvals. Process-level daemon; --channel flag or POST /connect starts it.",
               "chips": ["feishu", "wechat", "wecom", "streaming"],
-              "example": "./openagent-cli serve --channel feishu\n# QR scan → bot provisioned, creds saved\n# process-level: frontend only triggers/observes\n# /clear /mode (feishu) slash commands"
+              "example": "./openagent serve --channel feishu\n# QR scan → bot provisioned, creds saved\n# process-level: frontend only triggers/observes\n# /clear /mode (feishu) slash commands"
             },
             {
               "name": "Plan mode",
@@ -322,7 +322,7 @@
               "name": "Sandbox",
               "desc": "OS-native confinement for shell/file/network. Linux: bubblewrap (bwrap) — new mount namespace, system paths read-only, workspace writable, --die-with-parent; PID namespace intentionally NOT unshared (so the model can kill processes). macOS: sandbox-exec + Seatbelt profile. Windows: NYI (runs unconfined with warning). Network isolation optional (--sandbox + network:isolated).",
               "chips": ["bwrap", "seatbelt", "namespace", "fail-open"],
-              "example": "./openagent-cli serve --sandbox --port 8080\n# bwrap: --ro-bind /usr, --bind /workspace\n# --unshare-net (if network=isolated)\n# bwrap missing → unconfined + warn"
+              "example": "./openagent serve --sandbox --port 8080\n# bwrap: --ro-bind /usr, --bind /workspace\n# --unshare-net (if network=isolated)\n# bwrap missing → unconfined + warn"
             }
           ]
         }

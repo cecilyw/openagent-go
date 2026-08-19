@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/yusheng-g/openagent-go/version"
 )
 
 // ToolResult is the structured outcome of a [Tool] execution.
@@ -77,11 +79,12 @@ func (e *toolErrorValue) Error() string { return e.err.Message }
 const artifactFraction = 5
 
 // ArtifactRoot returns the platform-appropriate artifact directory:
-// Linux/macOS /tmp/openagent, Windows %TEMP%\openagent. Runtime result
-// truncation saves oversized output here. Kept identical to
-// tool.ArtifactRoot so the layout stays stable.
+// Linux/macOS /tmp/<version.Name> (default /tmp/openagent), Windows
+// %TEMP%\<version.Name>. Runtime result truncation saves oversized output
+// here. tool.ArtifactRoot delegates here so the two stay structurally
+// identical — there is a single source of truth for the tmp root.
 func ArtifactRoot() string {
-	return filepath.Join(os.TempDir(), "openagent")
+	return filepath.Join(os.TempDir(), version.SafeName())
 }
 
 // ResultPolicy decides how raw tool output becomes the final [ToolResult]
