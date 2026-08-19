@@ -14,7 +14,6 @@ package version
 
 import (
 	"strings"
-	"time"
 )
 
 // Name is the agent implementation name reported to peers (e.g. in ACP
@@ -23,9 +22,8 @@ import (
 var Name = "openagent"
 
 // Version is the build version reported to peers and via `--version`.
-// Inject via -X ...version.Version=<ver>; defaults to
-// "0.0.1-beta.YYYYMMDDHHMMSS".
-var Version = "0.0.1-beta." + time.Now().Format("20060102150405")
+// Inject via -X ...version.Version=<ver>.
+var Version = "0.0.1-beta.0"
 
 // SafeName returns Name with path separators and NUL replaced by '_', so it
 // is safe to use as a single filesystem path segment (e.g. under os.TempDir()).
