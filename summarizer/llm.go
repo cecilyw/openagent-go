@@ -75,12 +75,23 @@ func (c *Compressor) Summarize(ctx context.Context, messages []openagent.Message
 	// envelope mid-stream and parseSummary rejects it. Length control is
 	// the prompt hint below plus the prompt-side truncation in kernel.
 
-	// Retry transient failures (429/5xx incl. 504 Gateway Timeout) once
-	// with backoff — mirrors kernel/modelcall.go's retry contract. Without
-	// this a single transient gateway error fails compaction, the working
-	// set is left untrimmed, and the growing context eventually trips the
-	// hard window check (fail-loud turn failure).
-	const maxRetries = 1
+	// Retry transient failures (429/5xx incl. 504 Gateway Timeout) with
+	// backoff. The per-call timeout below is the primary defense against a
+	// hung gateway: without it a single 504 blocks the run for up to the
+	// model client's HTTP timeout (5m), and with retries that compounds to
+	// ~10m of dead time before the error surfaces. Retries stay modest
+	// (2, not 5) because compaction runs on the prepare-memory critical
+	// path every turn — a persistently failing gateway is better fast-
+	// failed (degrade to tail-trim in prepare.go) than retried into a
+	// multi-minute stall.
+	//
+	// Backoff sequence (seconds): 2, 4 — 2 retries, ~6s total.
+	// A provider-supplied RetryAfter (e.g. 429 Retry-After header) overrides
+	// the computed value for that attempt.
+	const (
+		maxRetries    = 2
+		callTimeout   = 90 * time.Second
+	)
 	var lastErr error
 	var resp *openagent.ChatCompletionResponse
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -91,13 +102,20 @@ func (c *Compressor) Summarize(ctx context.Context, messages []openagent.Message
 				return nil, fmt.Errorf("summarizer: model call: %w", ctx.Err())
 			}
 		}
+		// Per-call timeout: a 504 Gateway Timeout can take minutes to
+		// surface (the gateway waits on its own upstream first). Cap each
+		// attempt so a hung gateway fails fast instead of monopolizing the
+		// run. The derived ctx is scoped to this single model call; the
+		// parent ctx (cancel/deadline) is still honored via Done().
+		callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 		var err error
-		resp, err = model.ChatCompletion(ctx, openagent.ChatCompletionRequest{
+		resp, err = model.ChatCompletion(callCtx, openagent.ChatCompletionRequest{
 			Messages: []openagent.Message{
 				{Role: openagent.RoleSystem, Content: summarizeSystemPrompt},
 				{Role: openagent.RoleUser, Content: prompt},
 			},
 		})
+		cancel()
 		if err == nil {
 			if resp == nil {
 				// Defend against a third-party Model returning (nil, nil)
@@ -107,6 +125,10 @@ func (c *Compressor) Summarize(ctx context.Context, messages []openagent.Message
 			}
 			break
 		}
+		// A per-call timeout surfaces as context.DeadlineExceeded, which is
+		// NOT a RetryableError — it fails fast instead of retrying into
+		// another 90s stall. This is intentional: a gateway slow enough to
+		// trip 90s is unlikely to recover on the immediate next attempt.
 		var re *openagent.RetryableError
 		if !errors.As(err, &re) {
 			return nil, fmt.Errorf("summarizer: model call: %w", err)
@@ -137,7 +159,9 @@ func (c *Compressor) backoffFor(attempt int, lastErr error) time.Duration {
 	if c.backoff != nil {
 		return c.backoff(attempt, re)
 	}
-	b := time.Duration(1<<uint(attempt-1)) * time.Second
+	// 2, 4 seconds for attempts 1, 2 — matches kernel/modelcall.go's
+	// backoff base (2<<uint(attempt-1)).
+	b := time.Duration(2<<uint(attempt-1)) * time.Second
 	if re != nil && re.RetryAfter > 0 {
 		b = re.RetryAfter
 	}

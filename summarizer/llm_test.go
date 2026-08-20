@@ -65,7 +65,7 @@ func newTestCompressor(m openagent.Model) *Compressor {
 	return c
 }
 
-func TestSummarize_RetriesOnceOnRetryableError(t *testing.T) {
+func TestSummarize_RetriesOnRetryableError(t *testing.T) {
 	m := &scriptModel{steps: []scriptStep{
 		{err: &openagent.RetryableError{Err: errors.New("504 Gateway Timeout")}},
 		{resp: okResponse("1. Primary Request: ...\n8. Next Step: ...")},
@@ -88,7 +88,10 @@ func TestSummarize_RetriesOnceOnRetryableError(t *testing.T) {
 
 func TestSummarize_RetriesExhausted(t *testing.T) {
 	transient := &openagent.RetryableError{Err: errors.New("504 Gateway Timeout")}
+	// maxRetries=2 → 3 attempts total. scriptModel repeats the last step
+	// when exhausted, so 3 transient steps model "always fails".
 	m := &scriptModel{steps: []scriptStep{
+		{err: transient},
 		{err: transient},
 		{err: transient},
 	}}
@@ -109,8 +112,8 @@ func TestSummarize_RetriesExhausted(t *testing.T) {
 	if !errors.Is(err, transient) {
 		t.Fatalf("expected underlying RetryableError preserved, got: %v", err)
 	}
-	if got := m.callCount(); got != 2 {
-		t.Fatalf("expected exactly 2 attempts (1 retry), got %d", got)
+	if got := m.callCount(); got != 3 {
+		t.Fatalf("expected exactly 3 attempts (2 retries), got %d", got)
 	}
 }
 
@@ -192,7 +195,8 @@ func TestSummarize_CancelledDuringBackoff(t *testing.T) {
 		{resp: okResponse("ok")},
 	}}
 	c := New(m)
-	// Real backoff (1s) so the cancel below actually fires during the wait.
+	// Real backoff (2s for attempt 1) so the cancel below actually fires
+	// during the wait rather than racing the backoff timer.
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		cancel()

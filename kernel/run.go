@@ -99,7 +99,7 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 
 		if turn == 0 {
 			// ① Memory fetch — compaction + working set (turn 1 only).
-			messages, ci, err := rt.prepareMemory(ctx, session)
+			messages, ci, err := rt.prepareMemory(ctx, session, ch)
 			if err != nil {
 				runErr = err
 				return nil, err
@@ -110,9 +110,7 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 			// Orphan cleanup: leading assistant tool_calls without results.
 			workingMessages = ctxpkg.TrimOrphanToolCalls(workingMessages)
 			rt.compressed = ci.compressed
-			if ci.err != nil {
-				slog.Error("openagent: compaction failed", "error", ci.err)
-			}
+			rt.emitCompactionResult(ctx, ch, ci, "compaction failed")
 			// ② Prompt build (turn 1: prefix + input).
 			promptMsgs := append(append([]openagent.Message{}, prefix...), input)
 			workingMessages = append(workingMessages, promptMsgs...)
@@ -139,17 +137,15 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 		// Without this, accumulated tool results / cross-session history grows
 		// unbounded and the prompt exceeds the context window.
 		if turn > 0 && rt.deps.SessionStore != nil {
-			messages, ci, err := rt.prepareMemory(ctx, session)
+			messages, ci, err := rt.prepareMemory(ctx, session, ch)
 			if err != nil {
-				slog.Error("openagent: tool-turn memory prepare failed", "error", err)
+				slog.Error("tool-turn memory prepare failed", "error", err)
 				// Best-effort: keep the existing working set. The hard
 				// window check below surfaces any overflow (fail-loud).
 			} else {
 				workingMessages = ctxpkg.TrimOrphanToolCalls(messages)
 				rt.compressed = ci.compressed
-				if ci.err != nil {
-					slog.Error("openagent: tool-turn compaction failed", "error", ci.err)
-				}
+				rt.emitCompactionResult(ctx, ch, ci, "tool-turn compaction failed")
 			}
 		}
 
@@ -387,6 +383,38 @@ func chSend(ctx context.Context, ch chan<- openagent.StreamEvent, ev openagent.S
 	select {
 	case ch <- ev:
 	case <-ctx.Done():
+	}
+}
+
+// emitCompactionResult sends the StreamThought follow-up that closes the
+// "context compacting..." hint prepareMemory emitted before the Compact
+// call. It is a no-op when no compaction was attempted this pass
+// (ci.attempted == false — budget fit, nothing ran), so turns that never
+// stalled produce no compaction chatter at all.
+//
+// The success message mirrors the /compact slash echo (acp/commands.go:
+// "Compacted N messages → summary (freed ~K tokens).") so ACP clients see
+// the same wording whether compaction ran automatically or on demand.
+// On failure it names the error and notes the degraded tail-trim fallback
+// prepare.go already applied, so the user understands why older history
+// is absent from this turn's prompt.
+func (rt *Runtime) emitCompactionResult(ctx context.Context, ch chan<- openagent.StreamEvent, ci compactionInfo, slogMsg string) {
+	if !ci.attempted {
+		return
+	}
+	if ci.err != nil {
+		slog.Error(slogMsg, "error", ci.err)
+		chSend(ctx, ch, openagent.StreamEvent{
+			Type: openagent.StreamThought,
+			Text: fmt.Sprintf("context compaction failed: %v (degraded — older messages dropped from prompt)", ci.err),
+		})
+		return
+	}
+	if ci.count > 0 {
+		chSend(ctx, ch, openagent.StreamEvent{
+			Type: openagent.StreamThought,
+			Text: fmt.Sprintf("Compacted %d messages → summary (freed ~%d tokens).", ci.count, ci.freedTokens),
+		})
 	}
 }
 

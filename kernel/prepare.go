@@ -11,8 +11,14 @@ import (
 type compactionInfo struct {
 	err        error
 	count      int                          // number of messages newly compressed
+	freedTokens int                         // prompt tokens the new summary removed (approx, can be 0)
 	from, to   int                          // global index range covered (for observability)
 	compressed *openagent.CompressedContext // summary after this pass (nil if none)
+	// attempted is true when Compact was actually called (and the
+	// "context compacting..." pre-thought was sent to ch). The caller
+	// uses this to decide whether to emit a matching follow-up: when
+	// false, no compaction ran and there is nothing to close.
+	attempted bool
 }
 
 // workingTokenBudget returns the token budget for the working message set.
@@ -34,7 +40,13 @@ func (rt *Runtime) workingTokenBudget() int {
 //
 // The returned compactionInfo.err carries a compaction failure if one
 // occurred (observability only; the working set is still usable).
-func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session) ([]openagent.Message, compactionInfo, error) {
+//
+// ch receives a StreamThought ("context compacting...") immediately before
+// the Compact call so ACP clients can surface the stall to the user (a
+// compaction attempt can take tens of seconds against a slow gateway).
+// The matching "compacted/failed" follow-up is emitted by the caller
+// (run.go) after inspecting the returned compactionInfo. ch may be nil.
+func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session, ch chan<- openagent.StreamEvent) ([]openagent.Message, compactionInfo, error) {
 	var ci compactionInfo
 	if rt.deps.SessionStore == nil {
 		return nil, ci, nil
@@ -136,6 +148,17 @@ func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session)
 		}
 		globalCutoff := from + overflow
 		if rt.deps.Compressor != nil {
+			// Surface the compaction attempt to the user before the
+			// (potentially slow) Compact call — a gateway 504 can stall
+			// here for up to the summarizer's per-call timeout. Without
+			// this hint the ACP client just shows a spinning agent with
+			// no explanation. The follow-up ("compacted N tokens" /
+			// "failed") is emitted by run() after this returns.
+			chSend(ctx, ch, openagent.StreamEvent{
+				Type: openagent.StreamThought,
+				Text: "context compacting...",
+			})
+			ci.attempted = true
 			// messages=nil: the backend re-fetches from the session head.
 			// globalCutoff is a GLOBAL message index, but msgs is the
 			// post-summary window — the backend's prefetch branch only
@@ -151,6 +174,23 @@ func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session)
 						ci.count = cc.ThroughIndex - oldTI
 						ci.from = oldTI
 						ci.to = cc.ThroughIndex
+						// freedTokens mirrors CompressAll's accounting so the
+						// ACP "Compacted N messages → summary (freed ~K tokens)"
+						// thought is consistent with the /compact slash echo:
+						// tokens the newly-compressed messages occupied, minus
+						// the tokens the summary now occupies. msgs[overflow:]
+						// is exactly the post-summary working set retained in
+						// the prompt (the head was just folded into cc).
+						modelID := openagent.TokenizerModelID(rt.runModel)
+						freed := openagent.CountMessages(modelID, msgs[overflow:])
+						freed -= openagent.CountMessageTokens(modelID, openagent.Message{
+							Role:    openagent.RoleSystem,
+							Content: cc.Summary,
+						})
+						if freed < 0 {
+							freed = 0
+						}
+						ci.freedTokens = freed
 						// The backend may advance ThroughIndex past the
 						// overflow point (SafeCompressionBoundary
 						// adjustments). The working set must not re-inject
