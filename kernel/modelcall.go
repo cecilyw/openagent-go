@@ -14,13 +14,17 @@ import (
 // returned retries is the number of attempts before success (0 = first
 // try) — surfaced to the model.call stage detail so observers can track
 // provider reliability without counting StreamRetrying events.
+//
+// Backoff sequence (seconds): 2, 4, 8, 16, 32 — 5 retries, 62s total.
+// A provider-supplied RetryAfter (e.g. 429 Retry-After header) overrides
+// the computed value for that attempt.
 func (rt *Runtime) callModel(ctx context.Context, req openagent.ChatCompletionRequest, ch chan<- openagent.StreamEvent) (*openagent.ChatCompletionResponse, int, error) {
-	const maxRetries = 3
+	const maxRetries = 5
 	var lastErr error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			backoff := time.Duration(2<<uint(attempt-1)) * time.Second
 			var re *openagent.RetryableError
 			if errors.As(lastErr, &re) && re.RetryAfter > 0 {
 				backoff = re.RetryAfter
