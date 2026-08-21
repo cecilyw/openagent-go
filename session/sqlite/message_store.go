@@ -283,7 +283,7 @@ func (m *MessageStore) Compact(ctx context.Context, sessionID string, throughInd
 			fetchCount = count
 		}
 		rows, err := m.db.QueryContext(ctx,
-			`SELECT id, role, name, content, content_parts, tool_calls, tool_call_id, reasoning_content
+			`SELECT id, role, name, content, content_parts, tool_calls, tool_call_id, reasoning_content, created_at
 			 FROM messages WHERE session_id = ?
 			 ORDER BY id ASC LIMIT ?`,
 			sessionID, fetchCount,
@@ -291,8 +291,11 @@ func (m *MessageStore) Compact(ctx context.Context, sessionID string, throughInd
 		if err != nil {
 			return fmt.Errorf("sqlite compact: %w", err)
 		}
-		all, _ = scanMessages(rows)
+		all, err = scanMessages(rows)
 		rows.Close()
+		if err != nil {
+			return fmt.Errorf("sqlite compact: scan messages: %w", err)
+		}
 	}
 
 	if len(all) == 0 || throughIndex > len(all) {

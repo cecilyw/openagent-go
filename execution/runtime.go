@@ -338,13 +338,22 @@ func (e *ExecutionRuntime) observe(ctx context.Context, stage, phase string, det
 	if e.cfg.Observer == nil {
 		return
 	}
+	// "enter" events pass a zero start (callers mark the start separately
+	// and pass it to the matching "leave"). time.Since(zero) is ~1.7e9
+	// years — a nonsense duration that observers must ignore today; make
+	// it explicit zero instead so nothing has to special-case enter.
+	// Mirrors kernel.Runtime.observe (run.go).
+	d := time.Duration(0)
+	if !start.IsZero() {
+		d = time.Since(start)
+	}
 	// Stamp the trajectory grouping keys from ctx, mirroring kernel.Runtime.observe.
 	// tool.execute events fire from tool-job goroutines; without this they carry
 	// empty RunID/TurnID and break the per-run grouping invariant consumers rely
 	// on to reassemble trajectories.
 	ri := openagent.RunInfoFromContext(ctx)
 	e.cfg.Observer.ObserveStage(ctx, openagent.StageEvent{
-		Name: stage, Phase: phase, Detail: detail, Duration: time.Since(start), Err: err,
+		Name: stage, Phase: phase, Detail: detail, Duration: d, Err: err,
 		RunID: ri.RunID, TurnID: ri.TurnID, ParentRunID: ri.ParentRunID,
 	})
 }

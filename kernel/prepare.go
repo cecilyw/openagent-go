@@ -9,11 +9,11 @@ import (
 
 // compactionInfo carries compaction observability back to the loop.
 type compactionInfo struct {
-	err        error
-	count      int                          // number of messages newly compressed
-	freedTokens int                         // prompt tokens the new summary removed (approx, can be 0)
-	from, to   int                          // global index range covered (for observability)
-	compressed *openagent.CompressedContext // summary after this pass (nil if none)
+	err         error
+	count       int                          // number of messages newly compressed
+	freedTokens int                          // prompt tokens the new summary removed (approx, can be 0)
+	from, to    int                          // global index range covered (for observability)
+	compressed  *openagent.CompressedContext // summary after this pass (nil if none)
 	// attempted is true when Compact was actually called (and the
 	// "context compacting..." pre-thought was sent to ch). The caller
 	// uses this to decide whether to emit a matching follow-up: when
@@ -167,7 +167,7 @@ func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session,
 			// "failed") is emitted by run() after this returns.
 			chSend(ctx, ch, openagent.StreamEvent{
 				Type: openagent.StreamThought,
-				Text: "context compacting...",
+				Text: "context compacting...\n",
 			})
 			ci.attempted = true
 			openagent.ObserveDecision(ctx, rt.deps.Observer, openagent.DecisionEvent{
@@ -240,7 +240,7 @@ func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session,
 					overflow = len(msgs)
 				}
 			} else {
- 				// Compaction failed: the summary does NOT cover the head.
+				// Compaction failed: the summary does NOT cover the head.
 				// The original fail-loud design kept the whole working set
 				// and let the hard window check error. But when the summarizer
 				// fails persistently (429, timeout, network), this makes every
