@@ -2,7 +2,6 @@ package context
 
 import (
 	"context"
-	"log/slog"
 
 	openagent "github.com/yusheng-g/openagent-go"
 	"github.com/yusheng-g/openagent-go/provider/resource"
@@ -62,6 +61,26 @@ func (c *ContextRuntime) Build(ctx context.Context, req BuildRequest) (*AgentCon
 		return ac, nil
 	}
 
+	// DecisionObserver + RunInfo are injected into ctx by the kernel at
+	// run() entry (mirrors SessionFromContext). Leaf packages emit decision
+	// events without holding a struct field; nil = silent (no observer, or
+	// the RunObserver does not implement DecisionObserver).
+	obs := openagent.DecisionObserverFromContext(ctx)
+	ri := openagent.RunInfoFromContext(ctx)
+	// The emit closure does not hold `session` (req.Session is Build-scoped,
+	// not closure-scoped), so capture the ID once here for the SessionID
+	// join key. CallID stays empty — context decisions are not tool calls.
+	sessionID := req.Session.ID
+	emit := func(layer, outcome, subject string, detail map[string]any) {
+		if obs != nil {
+			obs.ObserveDecision(ctx, openagent.DecisionEvent{
+				Layer: layer, Outcome: outcome, Subject: subject,
+				Detail: detail, RunID: ri.RunID, TurnID: ri.TurnID,
+				ParentRunID: ri.ParentRunID, SessionID: sessionID,
+			})
+		}
+	}
+
 	// Knowledge recall (durable memory, user-level: knowledge is stored
 	// and recalled across sessions, not scoped to the current one).
 	if c.cfg.MemoryProvider != nil {
@@ -71,10 +90,17 @@ func (c *ContextRuntime) Build(ctx context.Context, req BuildRequest) (*AgentCon
 		memories, err := c.cfg.MemoryProvider.Recall(ctx, scope, query, 5)
 		if err != nil {
 			// Best-effort layer: a provider failure degrades to no
-			// memories, but must not fail the run or stay silent.
-			slog.Warn("openagent: knowledge recall failed", "error", err)
-		} else if len(memories) > 0 {
+			// memories, but must not fail the run. The DecisionEvent
+			// (OutcomeFailed) reaches the slog Observer via the ctx's
+			// DecisionObserver — the operator-facing log line.
+			emit(openagent.DecisionContextRecall, openagent.OutcomeFailed, query, map[string]any{"error": err.Error()})
+		} else {
 			ac.Memories = memories
+			outcome := openagent.OutcomeMiss
+			if len(memories) > 0 {
+				outcome = openagent.OutcomeHit
+			}
+			emit(openagent.DecisionContextRecall, outcome, query, map[string]any{"count": len(memories)})
 		}
 	}
 
@@ -87,9 +113,14 @@ func (c *ContextRuntime) Build(ctx context.Context, req BuildRequest) (*AgentCon
 	if c.cfg.SkillProvider != nil {
 		skills, err := c.cfg.SkillProvider.Discover(ctx)
 		if err != nil {
-			slog.Warn("openagent: skill discover failed", "error", err)
-		} else if len(skills) > 0 {
+			emit(openagent.DecisionContextSkill, openagent.OutcomeFailed, "catalog", map[string]any{"error": err.Error()})
+		} else {
 			ac.Skills = skills
+			outcome := openagent.OutcomeMiss
+			if len(skills) > 0 {
+				outcome = openagent.OutcomeHit
+			}
+			emit(openagent.DecisionContextSkill, outcome, "catalog", map[string]any{"count": len(skills)})
 		}
 	}
 
@@ -97,9 +128,14 @@ func (c *ContextRuntime) Build(ctx context.Context, req BuildRequest) (*AgentCon
 	if c.cfg.ResourceProvider != nil {
 		resources, err := c.cfg.ResourceProvider.Search(ctx, query, 5)
 		if err != nil {
-			slog.Warn("openagent: resource search failed", "error", err)
-		} else if len(resources) > 0 {
+			emit(openagent.DecisionContextResource, openagent.OutcomeFailed, query, map[string]any{"error": err.Error()})
+		} else {
 			ac.Resources = resources
+			outcome := openagent.OutcomeMiss
+			if len(resources) > 0 {
+				outcome = openagent.OutcomeHit
+			}
+			emit(openagent.DecisionContextResource, outcome, query, map[string]any{"count": len(resources)})
 		}
 	}
 

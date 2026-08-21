@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	openagent "github.com/yusheng-g/openagent-go"
 	"github.com/yusheng-g/openagent-go/agent"
 	"github.com/yusheng-g/openagent-go/kernel"
@@ -228,14 +229,31 @@ func (p *Plan) ExecuteWithState(ctx context.Context, session openagent.Session, 
 	ch := make(chan PlanEvent, 32)
 	go func() {
 		defer close(ch)
+		// #1: resume path — re-stamp ctx with the plan's existing
+		// PlanRunID so a resumed run joins the original plan trajectory
+		// (all replan/resume steps share one ID). A caller constructing a
+		// fresh state leaves PlanRunID blank; stamp a new one in that case
+		// (consistent with "resume = a new run of the same plan"). As in
+		// Plan.execute, preserve the grandparent ParentRunID across the
+		// re-stamp so a Plan nested inside a Team keeps its team back-link.
+		planRunID := state.PlanRunID
+		if planRunID == "" {
+			planRunID = uuid.NewString()
+			state.PlanRunID = planRunID
+		}
+		prev := openagent.RunInfoFromContext(ctx)
+		resumeCtx := openagent.WithRunInfo(ctx, openagent.RunInfo{
+			RunID: planRunID, TurnID: -1, ParentRunID: prev.RunID,
+		})
 		ex := &executor{
 			config:     p.config,
 			agents:     p.agents,
 			agentInfos: p.agentInfos,
 			model:      p.model,
 			sessionID:  session.ID,
+			planRunID:  planRunID,
 		}
-		if _, err := ex.execute(ctx, def, state, ch); err != nil {
+		if _, err := ex.execute(resumeCtx, def, state, ch); err != nil {
 			ch <- PlanEvent{Type: PlanEventError, ErrText: err.Error()}
 		}
 	}()
@@ -373,6 +391,18 @@ func (p *Plan) RunStream(ctx context.Context, session openagent.Session, goal st
 
 func (p *Plan) execute(ctx context.Context, session openagent.Session, def *PlanDef, eventCh chan<- PlanEvent) (*PlanResult, error) {
 	now := time.Now()
+	// #1: generate the plan-level run ID and stamp ctx so every step's
+	// child kernel.run() reads it as ParentRunID. WithRunInfo shadows
+	// (replaces) the ctx value rather than merging, so the grandparent
+	// ParentRunID must be read BEFORE re-stamping — a Plan nested inside a
+	// Team would otherwise lose the team's RunID and the trajectory would
+	// split at the plan boundary. TurnID is -1 (Plan has no turn loop;
+	// step/turn granularity lives in the child agents).
+	planRunID := uuid.NewString()
+	prev := openagent.RunInfoFromContext(ctx)
+	ctx = openagent.WithRunInfo(ctx, openagent.RunInfo{
+		RunID: planRunID, TurnID: -1, ParentRunID: prev.RunID,
+	})
 	state := &PlanState{
 		ID:        session.ID + "/plan",
 		Goal:      def.Goal,
@@ -381,6 +411,7 @@ func (p *Plan) execute(ctx context.Context, session openagent.Session, def *Plan
 		Results:   make(map[string]*StepResult),
 		CreatedAt: now,
 		UpdatedAt: now,
+		PlanRunID: planRunID,
 	}
 
 	ex := &executor{
@@ -389,6 +420,7 @@ func (p *Plan) execute(ctx context.Context, session openagent.Session, def *Plan
 		agentInfos: p.agentInfos,
 		model:      p.model,
 		sessionID:  session.ID,
+		planRunID:  planRunID,
 	}
 
 	return ex.execute(ctx, def, state, eventCh)

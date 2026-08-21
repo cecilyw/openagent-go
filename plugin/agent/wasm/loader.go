@@ -37,13 +37,21 @@ func (l loader) loadModule(ctx context.Context, name string, wasmBytes []byte) (
 	if err != nil {
 		return nil, fmt.Errorf("instantiate: %w", err)
 	}
-	return &module{mod: mod}, nil
+	return &module{
+		mod:         mod,
+		hasDecision: mod.ExportedFunction("observe_decision") != nil,
+	}, nil
 }
 
 // ── module wraps a wazero api.Module ──
 
 type module struct {
 	mod api.Module
+	// hasDecision is true when the guest exports "observe_decision". Older
+	// binaries compiled before the DecisionObserver ABI lack this export;
+	// the host probes once at load and silently skips decision events for
+	// them (graceful degradation — see runDecisionObservers).
+	hasDecision bool
 }
 
 // metadataJSON calls guest's metadata() → packed(ptr, len) and returns the JSON bytes.

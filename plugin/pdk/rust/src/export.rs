@@ -75,6 +75,23 @@ pub trait Plugin: Sized {
         StageOutput { action: alloc::string::String::from("continue"), reason: alloc::string::String::new() }
     }
 
+    /// Called when a decision event fires (a per-decision-point observation:
+    /// which policy layer fired, whether recall hit, whether compaction
+    /// freed tokens). Default: no-op. Override to record or surface
+    /// decisions (e.g. for RL telemetry). The returned DecisionOutput is
+    /// advisory — no action alters the run.
+    ///
+    /// Absent in older binaries: the host probes for the `observe_decision`
+    /// export at load time and silently skips plugins that don't expose it,
+    /// so a plugin compiled against an older PDK (no `observe_decision`
+    /// entry in export!) simply never receives decision events. A plugin
+    /// compiled against this PDK but not overriding this method still
+    /// exports `observe_decision` (the macro always emits it) — the host
+    /// delivers events, the default drops them.
+    fn observe_decision(_event: &DecisionInput) -> DecisionOutput {
+        DecisionOutput::default()
+    }
+
     // ── Scheduled jobs (all plugin types) ──
 
     /// Cron jobs this plugin declares. The host registers them at load
@@ -186,6 +203,18 @@ macro_rules! export {
         pub extern "C" fn run(ptr: u32, len: u32) -> u64 {
             let input: $crate::types::StageInput = $crate::read_input_json($crate::pk(ptr, len));
             let out = <$t as $crate::export::Plugin>::observe_stage(&input);
+            $crate::sdk_return_json(&out)
+        }
+
+        // observe_decision: the host probes for this export at load time.
+        // Older binaries (compiled against a PDK without this entry) lack
+        // it and are silently skipped for decision events. Always emitted
+        // here so a plugin compiled against this PDK is decision-aware
+        // even when observe_decision is not overridden (default = no-op).
+        #[no_mangle]
+        pub extern "C" fn observe_decision(ptr: u32, len: u32) -> u64 {
+            let input: $crate::types::DecisionInput = $crate::read_input_json($crate::pk(ptr, len));
+            let out = <$t as $crate::export::Plugin>::observe_decision(&input);
             $crate::sdk_return_json(&out)
         }
 

@@ -258,6 +258,41 @@ pub struct StageOutput {
     pub reason: String,
 }
 
+// ── Decision events (agent:observers plugins, optional) ──
+//
+// Decision events are delivered to observer plugins that export
+// observe_decision. The host probes for the export at load time; older
+// binaries compiled without it never receive these events (graceful
+// degradation). The shape mirrors openagent.DecisionEvent.
+
+/// Input passed to observer plugin's observe_decision() export.
+/// Matches agent/wasm/abi.go DecisionInput. Receive-only (the plugin
+/// deserializes it); turn_id carries the -1 pre-loop sentinel verbatim.
+#[derive(Deserialize, Default)]
+pub struct DecisionInput {
+    #[serde(default)]
+    pub layer: String,
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_id: String,
+    #[serde(default)]
+    pub turn_id: i32,
+}
+
+/// Output returned by observe_decision(). Advisory only — no action alters
+/// the run (unlike StageOutput.action). Kept struct-shaped for forward
+/// compatibility. Matches agent/wasm/abi.go DecisionOutput.
+#[derive(Serialize, Default)]
+pub struct DecisionOutput {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action: String,
+}
+
 // ── Command definitions (cli:commands plugins) ──
 
 /// A single command registered by a cli:commands plugin.

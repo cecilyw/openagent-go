@@ -284,3 +284,328 @@ func TestEngine_WriteDirectoryLevelGrant(t *testing.T) {
 		t.Fatalf("human asks = %d, want 2 (sensitive dir keeps single-file)", human.asked)
 	}
 }
+
+// ── DecisionObserver: per-layer emit ──
+
+// captureDec records every DecisionEvent the Engine emits, in order.
+type captureDec struct {
+	events []openagent.DecisionEvent
+}
+
+func (c *captureDec) ObserveDecision(_ context.Context, e openagent.DecisionEvent) {
+	c.events = append(c.events, e)
+}
+
+// findLayer returns the first event for the given layer, or nil.
+func (c *captureDec) findLayer(layer string) *openagent.DecisionEvent {
+	for i := range c.events {
+		if c.events[i].Layer == layer {
+			return &c.events[i]
+		}
+	}
+	return nil
+}
+
+// runInfoCtx stamps a RunID/TurnID into ctx so emitted events carry them —
+// verifies the Engine reads RunInfo from ctx (not from a stale field).
+func runInfoCtx(runID string, turn int) context.Context {
+	return openagent.WithRunInfo(context.Background(), openagent.RunInfo{RunID: runID, TurnID: turn})
+}
+
+// TestEngine_EmitsRuleLayer: a matched rule emits one DecisionPolicyRule
+// event with the rule's outcome (Allow/Deny/Ask), and short-circuits so no
+// lower layer fires.
+func TestEngine_EmitsRuleLayer(t *testing.T) {
+	c := &captureDec{}
+	e := NewEngine([]Rule{
+		{ToolPattern: "shell", Action: Deny, Reason: "no shell"},
+	}, NewToolClassifier(), NewSessionApprovalMemory(), &fakeHuman{decision: Decision{Action: Allow}}).
+		WithDecisionObserver(c)
+
+	ctx := runInfoCtx("run-1", 2)
+	d, err := e.Evaluate(ctx, call("shell"), def("shell"), openagent.Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Action != Deny {
+		t.Fatalf("action = %v, want Deny", d.Action)
+	}
+
+	if got := len(c.events); got != 1 {
+		t.Fatalf("emitted %d events, want 1 (rule short-circuit)", got)
+	}
+	ev := c.events[0]
+	if ev.Layer != openagent.DecisionPolicyRule {
+		t.Errorf("layer = %q, want %q", ev.Layer, openagent.DecisionPolicyRule)
+	}
+	if ev.Outcome != string(Deny) {
+		t.Errorf("outcome = %q, want %q", ev.Outcome, Deny)
+	}
+	if ev.Subject != "shell" {
+		t.Errorf("subject = %q, want shell", ev.Subject)
+	}
+	if ev.RunID != "run-1" || ev.TurnID != 2 {
+		t.Errorf("RunID/TurnID = %q/%d, want run-1/2 (from ctx)", ev.RunID, ev.TurnID)
+	}
+	if ev.Detail["reason"] != "no shell" {
+		t.Errorf("detail.reason = %v, want no shell", ev.Detail["reason"])
+	}
+}
+
+// TestEngine_EmitsSafetyLayer: a read-only tool emits DecisionPolicySafety
+// with OutcomeAllow and short-circuits before memory/human.
+func TestEngine_EmitsSafetyLayer(t *testing.T) {
+	c := &captureDec{}
+	e := NewEngine(nil, NewToolClassifier(), nil, &fakeHuman{decision: Decision{Action: Deny}}).
+		WithDecisionObserver(c)
+
+	d, err := e.Evaluate(runInfoCtx("run-2", 0), call("read"), def("read"), openagent.Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Action != Allow {
+		t.Fatalf("read-only action = %v, want Allow", d.Action)
+	}
+
+	if got := len(c.events); got != 1 {
+		t.Fatalf("emitted %d events, want 1 (safety short-circuit)", got)
+	}
+	ev := c.events[0]
+	if ev.Layer != openagent.DecisionPolicySafety {
+		t.Errorf("layer = %q, want %q", ev.Layer, openagent.DecisionPolicySafety)
+	}
+	if ev.Outcome != openagent.OutcomeAllow {
+		t.Errorf("outcome = %q, want %q", ev.Outcome, openagent.OutcomeAllow)
+	}
+	if ev.Detail["classifier"] != "readonly" {
+		t.Errorf("detail.classifier = %v, want readonly", ev.Detail["classifier"])
+	}
+}
+
+// TestEngine_EmitsMemoryLayerHit: a remembered Allow emits
+// DecisionPolicyMemory with OutcomeHit (single-key mode) and short-circuits
+// past the human layer.
+func TestEngine_EmitsMemoryLayerHit(t *testing.T) {
+	mem := NewSessionApprovalMemory()
+	human := &fakeHuman{decision: Decision{Action: Deny}}
+	e := NewEngine(nil, NewToolClassifier(), mem, human).WithDecisionObserver(&captureDec{})
+	ctx := context.Background()
+	sess := openagent.Session{ID: "s1"}
+
+	// Seed memory with an Allow for "shell {}".
+	key := ApprovalKey("shell", json.RawMessage("{}"))
+	_ = mem.Remember(ctx, sess.ID, key, Decision{Action: Allow, Reason: "always allow"})
+
+	c := &captureDec{}
+	e.WithDecisionObserver(c)
+	d, _ := e.Evaluate(runInfoCtx("run-3", 1), call("shell"), def("shell"), sess)
+	if d.Action != Allow {
+		t.Fatalf("remembered action = %v, want Allow", d.Action)
+	}
+	if human.asked != 0 {
+		t.Fatalf("human asked %d times; memory should have short-circuited", human.asked)
+	}
+
+	if ev := c.findLayer(openagent.DecisionPolicyMemory); ev == nil {
+		t.Fatalf("no DecisionPolicyMemory event; got %v", c.events)
+	} else if ev.Outcome != openagent.OutcomeHit {
+		t.Errorf("memory outcome = %q, want %q", ev.Outcome, openagent.OutcomeHit)
+	} else if ev.Detail["mode"] != "single" {
+		t.Errorf("memory mode = %v, want single", ev.Detail["mode"])
+	}
+	// Human layer must NOT have fired.
+	if ev := c.findLayer(openagent.DecisionPolicyHuman); ev != nil {
+		t.Errorf("human layer fired (%+v); memory should short-circuit", ev)
+	}
+}
+
+// TestEngine_EmitsMemoryLayerMiss: when memory has no entry, the memory
+// layer emits OutcomeMiss and defers to the human layer (which then emits
+// OutcomeAsk). Two events total, in order.
+func TestEngine_EmitsMemoryLayerMiss(t *testing.T) {
+	mem := NewSessionApprovalMemory()
+	human := &fakeHuman{decision: Decision{Action: Allow}}
+	c := &captureDec{}
+	e := NewEngine(nil, NewToolClassifier(), mem, human).WithDecisionObserver(c)
+
+	_, _ = e.Evaluate(runInfoCtx("run-4", 0), call("shell"), def("shell"), openagent.Session{ID: "s1"})
+
+	// memory miss → human ask. Two layers fired, in that order.
+	if ev := c.findLayer(openagent.DecisionPolicyMemory); ev == nil {
+		t.Fatalf("no memory event; got %v", c.events)
+	} else if ev.Outcome != openagent.OutcomeMiss {
+		t.Errorf("memory outcome = %q, want %q", ev.Outcome, openagent.OutcomeMiss)
+	}
+	if ev := c.findLayer(openagent.DecisionPolicyHuman); ev == nil {
+		t.Fatalf("no human event; got %v", c.events)
+	} else if ev.Outcome != openagent.OutcomeAsk {
+		t.Errorf("human outcome = %q, want %q", ev.Outcome, openagent.OutcomeAsk)
+	}
+	// Order: memory before human.
+	var memIdx, humanIdx int
+	for i, ev := range c.events {
+		if ev.Layer == openagent.DecisionPolicyMemory {
+			memIdx = i
+		}
+		if ev.Layer == openagent.DecisionPolicyHuman {
+			humanIdx = i
+		}
+	}
+	if humanIdx <= memIdx {
+		t.Errorf("human event (%d) not after memory event (%d)", humanIdx, memIdx)
+	}
+}
+
+// TestEngine_EmitsHumanLayerFailClosed: a nil Human fails closed (Deny). The
+// human layer emits OutcomeDeny — not OutcomeAsk — so a consumer can tell a
+// fail-closed denial from a real human escalation.
+func TestEngine_EmitsHumanLayerFailClosed(t *testing.T) {
+	c := &captureDec{}
+	e := NewEngine(nil, NewToolClassifier(), nil, nil).WithDecisionObserver(c)
+
+	d, _ := e.Evaluate(runInfoCtx("run-5", 0), call("shell"), def("shell"), openagent.Session{})
+	if d.Action != Deny {
+		t.Fatalf("action = %v, want Deny (fail closed)", d.Action)
+	}
+	if ev := c.findLayer(openagent.DecisionPolicyHuman); ev == nil {
+		t.Fatalf("no human event; got %v", c.events)
+	} else if ev.Outcome != openagent.OutcomeDeny {
+		t.Errorf("human outcome = %q, want %q (fail closed)", ev.Outcome, openagent.OutcomeDeny)
+	}
+}
+
+// TestEngine_NoObserverSilent: with DecObserver == nil, Evaluate runs the
+// full chain and produces the right Decision without emitting anything. This
+// is the old-observer contract — a non-DecisionObserver RunObserver wired
+// through the kernel never sets DecObserver, so governance stays silent.
+func TestEngine_NoObserverSilent(t *testing.T) {
+	// nil observer, nil human → fail-closed Deny at the human layer.
+	e := NewEngine(nil, NewToolClassifier(), nil, nil)
+	d, err := e.Evaluate(context.Background(), call("shell"), def("shell"), openagent.Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Action != Deny {
+		t.Fatalf("action = %v, want Deny", d.Action)
+	}
+}
+
+// ── #2/#4: four-tuple join-key stamping ──
+
+// callWithID builds a ToolCall with a caller-chosen ID (the `call` helper
+// hardcodes "c1"; these tests need distinct IDs to prove CallID is stamped
+// per-call, not hardcoded).
+func callWithID(id, name string) openagent.ToolCall {
+	c := call(name)
+	c.ID = id
+	return c
+}
+
+// assertFourTuple verifies a DecisionEvent carries the full four-tuple join
+// key (session_id, run_id, turn_id, call_id) the Engine stamps at every emit
+// site. This is the #2/#4 regression — without it, two calls to the same tool
+// in one turn produce indistinguishable events (same Subject, same RunID,
+// same TurnID; only CallID disambiguates).
+func assertFourTuple(t *testing.T, ev *openagent.DecisionEvent, wantRunID, wantSessionID, wantCallID string, wantTurnID int) {
+	t.Helper()
+	if ev.RunID != wantRunID {
+		t.Errorf("%s RunID = %q, want %q", ev.Layer, ev.RunID, wantRunID)
+	}
+	if ev.TurnID != wantTurnID {
+		t.Errorf("%s TurnID = %d, want %d", ev.Layer, ev.TurnID, wantTurnID)
+	}
+	if ev.SessionID != wantSessionID {
+		t.Errorf("%s SessionID = %q, want %q (eventbus join key incomplete)", ev.Layer, ev.SessionID, wantSessionID)
+	}
+	if ev.CallID != wantCallID {
+		t.Errorf("%s CallID = %q, want %q (same-tool-same-turn disambiguator lost)", ev.Layer, ev.CallID, wantCallID)
+	}
+}
+
+// TestEngine_FourTupleOnEveryLayer: every layer that fires (rule, safety,
+// memory, human) must stamp the full four-tuple join key from ctx RunInfo +
+// the Evaluate-scoped call/session. This is the #2/#4 regression for the
+// direct emit sites in policy.go (Evaluate's emit closure + askHuman).
+func TestEngine_FourTupleOnEveryLayer(t *testing.T) {
+	// Rule layer.
+	{
+		c := &captureDec{}
+		e := NewEngine([]Rule{{ToolPattern: "shell", Action: Deny, Reason: "no"}},
+			nil, nil, nil).WithDecisionObserver(c)
+		ctx := runInfoCtx("run-4t", 5)
+		sess := openagent.Session{ID: "sess-4t"}
+		_, _ = e.Evaluate(ctx, callWithID("call-rule", "shell"), def("shell"), sess)
+		if ev := c.findLayer(openagent.DecisionPolicyRule); ev == nil {
+			t.Fatalf("no rule event; got %v", c.events)
+		} else {
+			assertFourTuple(t, ev, "run-4t", "sess-4t", "call-rule", 5)
+		}
+	}
+	// Safety layer (read-only short-circuit).
+	{
+		c := &captureDec{}
+		e := NewEngine(nil, NewToolClassifier(), nil, nil).WithDecisionObserver(c)
+		ctx := runInfoCtx("run-4t", 5)
+		sess := openagent.Session{ID: "sess-4t"}
+		_, _ = e.Evaluate(ctx, callWithID("call-safe", "read"), def("read"), sess)
+		if ev := c.findLayer(openagent.DecisionPolicySafety); ev == nil {
+			t.Fatalf("no safety event; got %v", c.events)
+		} else {
+			assertFourTuple(t, ev, "run-4t", "sess-4t", "call-safe", 5)
+		}
+	}
+	// Human layer (fail-closed Deny, nil human).
+	{
+		c := &captureDec{}
+		e := NewEngine(nil, NewToolClassifier(), nil, nil).WithDecisionObserver(c)
+		ctx := runInfoCtx("run-4t", 5)
+		sess := openagent.Session{ID: "sess-4t"}
+		_, _ = e.Evaluate(ctx, callWithID("call-human", "shell"), def("shell"), sess)
+		if ev := c.findLayer(openagent.DecisionPolicyHuman); ev == nil {
+			t.Fatalf("no human event; got %v", c.events)
+		} else {
+			assertFourTuple(t, ev, "run-4t", "sess-4t", "call-human", 5)
+		}
+	}
+}
+
+// TestEngine_CallIDDisambiguatesSameToolSameTurn: #4 core — when the same
+// tool is called twice in one turn, the two DecisionEvents share Subject,
+// RunID, TurnID, and SessionID, but MUST differ on CallID. Without CallID a
+// consumer cannot tell which decision governed which call.
+func TestEngine_CallIDDisambiguatesSameToolSameTurn(t *testing.T) {
+	c := &captureDec{}
+	e := NewEngine(nil, NewToolClassifier(), nil, &fakeHuman{decision: Decision{Action: Allow}}).
+		WithDecisionObserver(c)
+	ctx := runInfoCtx("run-dual", 3)
+	sess := openagent.Session{ID: "sess-dual"}
+
+	// Two calls to "shell" in the same turn, distinct call IDs.
+	_, _ = e.Evaluate(ctx, callWithID("call-A", "shell"), def("shell"), sess)
+	_, _ = e.Evaluate(ctx, callWithID("call-B", "shell"), def("shell"), sess)
+
+	humanEvents := []*openagent.DecisionEvent{}
+	for i := range c.events {
+		if c.events[i].Layer == openagent.DecisionPolicyHuman {
+			humanEvents = append(humanEvents, &c.events[i])
+		}
+	}
+	if len(humanEvents) != 2 {
+		t.Fatalf("human events = %d, want 2", len(humanEvents))
+	}
+	// Shared join keys (subject/run/turn/session).
+	for _, ev := range humanEvents {
+		if ev.Subject != "shell" || ev.RunID != "run-dual" || ev.TurnID != 3 || ev.SessionID != "sess-dual" {
+			t.Errorf("human event join keys = %+v, want shell/run-dual/3/sess-dual", ev)
+		}
+	}
+	// Distinct CallIDs.
+	if humanEvents[0].CallID == humanEvents[1].CallID {
+		t.Errorf("two calls share CallID %q; same-tool-same-turn events are indistinguishable", humanEvents[0].CallID)
+	}
+	// Both call IDs present (order-agnostic).
+	got := map[string]bool{humanEvents[0].CallID: true, humanEvents[1].CallID: true}
+	if !got["call-A"] || !got["call-B"] {
+		t.Errorf("CallIDs = %v, want {call-A, call-B}", got)
+	}
+}

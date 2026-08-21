@@ -60,3 +60,31 @@ func (s *wasmObserver) invoke(ctx context.Context, event openagent.StageEvent) (
 	// decides from Action, never from err.
 	return &out, nil
 }
+
+// invokeDecision calls the guest's observe_decision() and returns the
+// parsed output. Only called for modules that probed hasDecision at load —
+// the export is guaranteed present. Mirrors invoke() but targets the
+// decision ABI; there is no abort path (decisions are observations).
+func (s *wasmObserver) invokeDecision(ctx context.Context, event openagent.DecisionEvent) (*DecisionOutput, error) {
+	input := DecisionInput{
+		Layer:   event.Layer,
+		Outcome: event.Outcome,
+		Subject: event.Subject,
+		Detail:  event.Detail,
+		RunID:   event.RunID,
+		TurnID:  event.TurnID,
+	}
+	inputJSON, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("wasm decision %q: marshal: %w", s.meta.Name, err)
+	}
+	outputJSON, err := s.mod.invoke(ctx, "observe_decision", inputJSON)
+	if err != nil {
+		return nil, fmt.Errorf("wasm decision %q: %w", s.meta.Name, err)
+	}
+	var out DecisionOutput
+	if err := json.Unmarshal(outputJSON, &out); err != nil {
+		return nil, fmt.Errorf("wasm decision %q: parse output: %w", s.meta.Name, err)
+	}
+	return &out, nil
+}

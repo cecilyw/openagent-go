@@ -33,12 +33,26 @@ type Manager struct {
 
 	onAbort func(reason string)
 
-	// observeCh feeds the single background observer worker. Created by
-	// Observer(); never closed (a close racing a send would panic — the
-	// worker goroutine lives for the manager's lifetime and drains on
-	// process exit; Close only detaches the channel so no new events are
-	// accepted).
-	observeCh chan openagent.StageEvent
+	// onStageProcessed/onDecisionProcessed are test seams for observeLoop.
+	// nil in production (zero overhead); when set by a test they fire
+	// synchronously in the worker right after dispatching an event, letting a
+	// test deterministically assert dispatch ORDER without loading a .wasm
+	// binary (the real observer default returns empty Action and logs nothing,
+	// so slog capture cannot reveal when a decision is processed). Mirrors the
+	// onAbort callback-field pattern.
+	onStageProcessed    func(openagent.StageEvent)
+	onDecisionProcessed func(openagent.DecisionEvent)
+
+	// stageCh / decisionCh feed the single background observer worker
+	// (Observer lazily creates them; never closed — a close racing a send
+	// would panic, and the worker lives for the manager's lifetime, draining
+	// on process exit; Close only detaches both so no new events are
+	// accepted). 两个 stream 各自 FIFO;单 worker 串行化 wazero 调用 + 隔离
+	// plugin panic。decision 优先排空防止低频 decision 事件被高频 stage 事件
+	// 饥饿。cross-stream 顺序不保证(也无消费者需要——stage 与 decision 路由
+	// 到不同 export)。
+	stageCh    chan openagent.StageEvent
+	decisionCh chan openagent.DecisionEvent
 }
 
 // NewManager creates a Manager for the given plugin directory.
@@ -233,15 +247,20 @@ func (m *Manager) Tools() []openagent.Tool {
 	return out
 }
 
-// Observer returns a RunObserver that dispatches to matching Stage plugins.
+// Observer returns a RunObserver that dispatches to matching WASM plugins.
+// The returned router implements BOTH RunObserver and DecisionObserver:
+// stage events route to plugins exporting "run", decision events to plugins
+// exporting "observe_decision" (probed at load). A RunObserver-only consumer
+// is unaffected — ObserveDecision is an optional interface.
 func (m *Manager) Observer() openagent.RunObserver {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.observers) == 0 {
 		return nil
 	}
-	if m.observeCh == nil {
-		m.observeCh = make(chan openagent.StageEvent, 64)
+	if m.stageCh == nil {
+		m.stageCh = make(chan openagent.StageEvent, 64)
+		m.decisionCh = make(chan openagent.DecisionEvent, 64)
 		go m.observeLoop()
 	}
 	return &observerRouter{mgr: m}
@@ -261,32 +280,46 @@ func (m *Manager) Close() error {
 		}
 		m.scheduled = make(map[string][]string)
 	}
-	m.observeCh = nil
+	m.stageCh = nil
+	m.decisionCh = nil
 	if m.ldr.runtime == nil {
 		return nil
 	}
 	return m.ldr.Close(context.Background())
 }
 
-// observerRouter dispatches stage events to matching WASM stage plugins on
-// a background worker: a slow or broken plugin must not block the agent
-// main loop. Events stay ordered (single worker); a panic in one plugin is
-// contained and logged. An abort action stops dispatch for that event and
-// fires the registered callback.
+// observerRouter dispatches stage and decision events to matching WASM
+// plugins on a background worker: a slow or broken plugin must not block
+// the agent main loop. Events stay ordered (single worker); a panic in one
+// plugin is contained and logged. An abort action stops dispatch for that
+// stage event and fires the registered callback.
+//
+// Implements RunObserver (ObserveStage) AND DecisionObserver (ObserveDecision).
+// The latter is an optional interface — old Go code holding the router as a
+// RunObserver is unaffected; the kernel's type assertion opts into decision
+// routing only when it asks for it.
 type observerRouter struct {
 	mgr *Manager
 }
 
 func (o *observerRouter) ObserveStage(_ context.Context, event openagent.StageEvent) {
-	o.mgr.dispatch(event)
+	o.mgr.dispatchStage(event)
 }
 
-// dispatch enqueues a stage event for the background worker. When the
+// ObserveDecision routes a decision event to plugins exporting
+// "observe_decision". Old binaries (no export) are skipped inside
+// runDecisionObservers — the event is never delivered to a plugin that
+// cannot accept it.
+func (o *observerRouter) ObserveDecision(_ context.Context, event openagent.DecisionEvent) {
+	o.mgr.dispatchDecision(event)
+}
+
+// dispatchStage enqueues a stage event for the background worker. When the
 // queue is full (a stuck observer), the event is dropped with a warning —
 // observing must never stall the run.
-func (m *Manager) dispatch(event openagent.StageEvent) {
+func (m *Manager) dispatchStage(event openagent.StageEvent) {
 	m.mu.Lock()
-	ch := m.observeCh
+	ch := m.stageCh
 	m.mu.Unlock()
 	if ch == nil {
 		return // manager closed
@@ -298,10 +331,66 @@ func (m *Manager) dispatch(event openagent.StageEvent) {
 	}
 }
 
-// observeLoop is the single worker consuming stage events in order.
+// dispatchDecision enqueues a decision event for the same single worker as
+// stage events. observeLoop priority-drains decisionCh before blocking on
+// either channel, so a low-frequency decision event cannot be starved by a
+// flood of high-frequency stage events. Same drop-on-full policy.
+func (m *Manager) dispatchDecision(event openagent.DecisionEvent) {
+	m.mu.Lock()
+	ch := m.decisionCh
+	m.mu.Unlock()
+	if ch == nil {
+		return // manager closed
+	}
+	select {
+	case ch <- event:
+	default:
+		slog.Warn("openagent: wasm observer queue full, dropping decision event", "layer", event.Layer, "outcome", event.Outcome)
+	}
+}
+
+// observeLoop is the single worker consuming stage and decision events. One
+// worker keeps wazero calls serialized (module concurrency safety is unknown)
+// and isolates a panicking plugin from corrupting another event's dispatch.
+// decisionCh is drained with priority each iteration so low-frequency decision
+// events are never starved by a flood of stage events; per-stream FIFO still
+// holds within each channel. The loop ends when both channels are detached
+// (Close nils them) and drained — the range-style exit below handles that.
 func (m *Manager) observeLoop() {
-	for ev := range m.observeCh {
-		m.runObservers(ev)
+	for {
+		// Priority drain: process any pending decision first so a burst of
+		// stage events cannot indefinitely defer a decision.
+		select {
+		case d, ok := <-m.decisionCh:
+			if !ok {
+				return
+			}
+			m.runDecisionObservers(d)
+			if m.onDecisionProcessed != nil {
+				m.onDecisionProcessed(d)
+			}
+			continue
+		default:
+		}
+		// No decision pending — block for the next event on either stream.
+		select {
+		case d, ok := <-m.decisionCh:
+			if !ok {
+				return
+			}
+			m.runDecisionObservers(d)
+			if m.onDecisionProcessed != nil {
+				m.onDecisionProcessed(d)
+			}
+		case s, ok := <-m.stageCh:
+			if !ok {
+				return
+			}
+			m.runObservers(s)
+			if m.onStageProcessed != nil {
+				m.onStageProcessed(s)
+			}
+		}
 	}
 }
 
@@ -333,5 +422,40 @@ func (m *Manager) runObservers(event openagent.StageEvent) {
 			return // abort stops dispatch for this event
 		}
 		slog.Info("wasm observer", "plugin", s.meta.Name, "stage", event.Name, "phase", event.Phase, "action", out.Action)
+	}
+}
+
+// runDecisionObservers fans a decision event out to every plugin that
+// exported "observe_decision" at load time. Plugins compiled before the
+// DecisionObserver ABI (hasDecision == false) are skipped — they cannot
+// accept the event, so delivering it would be a wasted call into a missing
+// export. There is no stage/phase filter (unlike runObservers): a decision
+// is not tied to a stage, and a decision-aware plugin sees every decision.
+// No abort path — decisions are observations, not control flow.
+func (m *Manager) runDecisionObservers(event openagent.DecisionEvent) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("openagent: wasm decision observer panicked", "panic", rec)
+		}
+	}()
+	m.mu.Lock()
+	observers := m.observers
+	m.mu.Unlock()
+
+	for _, s := range observers {
+		if !s.mod.hasDecision {
+			continue // old binary — silently skip
+		}
+		out, err := s.invokeDecision(context.Background(), event)
+		if err != nil {
+			slog.Error("wasm decision observer error", "plugin", s.meta.Name, "layer", event.Layer, "outcome", event.Outcome, "error", err)
+			continue
+		}
+		// Decision output is advisory (a plugin may surface or record the
+		// event); there is no action that alters the run. Log only when the
+		// plugin returned something non-empty, to avoid noise.
+		if out != nil && out.Action != "" {
+			slog.Info("wasm decision observer", "plugin", s.meta.Name, "layer", event.Layer, "action", out.Action)
+		}
 	}
 }

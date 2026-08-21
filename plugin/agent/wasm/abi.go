@@ -68,6 +68,32 @@ type StageOutput struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// ── Decision input/output ──
+//
+// Decision events are delivered to observer plugins that export
+// "observe_decision" (probed at load — see module.hasDecision). Older
+// binaries without the export never receive these; the host skips them
+// silently. The shape mirrors openagent.DecisionEvent so a plugin sees the
+// same fields a Go DecisionObserver would.
+
+// DecisionInput is passed to observer plugins' observe_decision().
+type DecisionInput struct {
+	Layer   string         `json:"layer"`           // decision-layer constant
+	Outcome string         `json:"outcome"`         // decision-value constant
+	Subject string         `json:"subject"`         // what was decided on
+	Detail  map[string]any `json:"detail,omitempty"`
+	RunID   string         `json:"run_id,omitempty"`  // trajectory grouping key
+	TurnID  int            `json:"turn_id,omitempty"` // turn index (-1 = pre-loop)
+}
+
+// DecisionOutput is returned from observe_decision(). Advisory only — a
+// plugin may surface or record the event; no action alters the run (unlike
+// StageOutput.ActionAbort). Kept struct-shaped for forward compatibility
+// (a future plugin may return a derived insight).
+type DecisionOutput struct {
+	Action string `json:"action,omitempty"` // reserved (always empty today)
+}
+
 // ── Tool input/output ──
 
 // ToolInput is passed to tool plugins' execute().

@@ -1,17 +1,31 @@
-// Package slog is an openagent built-in RunHooks implementation that logs
-// the agent lifecycle with log/slog. Zero external dependencies — uses
-// only the standard library. Out of the box: agent runs and tool calls
-// are logged with model, token usage, duration, and errors; combine with
-// hooks/redact (redact FIRST) to keep secrets out of logs.
+// Package slog provides openagent's built-in log/slog implementations of the
+// two observation axes. Both are zero-external-dependency (standard library
+// only) and share a single *slog.Logger so one handler config governs the
+// whole run's logging:
 //
-// Usage (new API — wire via kernel.Deps):
+//   - Hooks: openagent.RunHooks — the lifecycle axis. Logs agent start/end
+//     (model, token usage, duration, errors) and tool start/end. Combine with
+//     hooks/redact (redact FIRST) to keep secrets out of logs.
+//   - Observer: openagent.RunObserver + openagent.DecisionObserver — the
+//     observation axis. Logs stage boundaries (enter/leave, with run/turn
+//     join keys) and decision events (layer + outcome, level by outcome).
+//
+// The two types are independent: wire one or both via kernel.Deps. Hooks
+// fires on agent/tool lifecycle transitions; Observer fires on stage
+// boundaries and per-decision events — neither subsumes the other.
+//
+// Usage (wire both via kernel.Deps):
 //
 //	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 //	deps := kernel.Deps{
-//	    Hooks: openagent.MultiHooks(redacthook.NewHook(envNames), sloghooks.New(logger)),
+//	    Hooks:    openagent.MultiHooks(redacthook.NewHook(envNames), sloghooks.New(logger)),
+//	    Observer: sloghooks.NewObserver(logger),
 //	    ...
 //	}
 //	rt := kernel.New(cfg, deps)
+//
+// In ACP/HTTP/run CLI modes the observer is backed by slog.Default() — a
+// rotated file or io.Discard, NEVER stderr (stderr is the ACP control pipe).
 package slog
 
 import (

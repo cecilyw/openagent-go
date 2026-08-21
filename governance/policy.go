@@ -110,12 +110,25 @@ type Engine struct {
 	Safety SafetyClassifier // nil = no safety layer (all calls advance)
 	Memory ApprovalMemory   // session-scoped approval memory (nil = no memory layer)
 	Human  HumanApprover    // final layer (nil = Ask resolves to Deny)
+	// DecObserver receives per-layer decision events (rule/safety/memory/human).
+	// nil = silent. Set via WithDecisionObserver; not a NewEngine parameter so
+	// the constructor signature stays stable. The kernel sets it only when the
+	// configured RunObserver also implements DecisionObserver.
+	DecObserver openagent.DecisionObserver
 }
 
 // NewEngine creates an engine. When human is nil, Ask decisions resolve to
 // Deny (fail closed).
 func NewEngine(rules []Rule, safety SafetyClassifier, mem ApprovalMemory, human HumanApprover) *Engine {
 	return &Engine{Rules: rules, Safety: safety, Memory: mem, Human: human}
+}
+
+// WithDecisionObserver sets the observer for per-layer decision events. The
+// kernel chains this after NewEngine when the configured RunObserver also
+// implements DecisionObserver; nil-safe. Returns e for chaining.
+func (e *Engine) WithDecisionObserver(obs openagent.DecisionObserver) *Engine {
+	e.DecObserver = obs
+	return e
 }
 
 // matchesRule reports whether a rule matches the tool name and args.
@@ -163,23 +176,53 @@ func matchesRule(rule Rule, call openagent.ToolCall) bool {
 // Evaluate runs the layered chain. The resulting Decision is final: Allow
 // executes the call (with ModifiedArgs if the human edited them), Deny
 // blocks it, Ask (from Rules) routes to the human layer.
+//
+// Each layer emits one DecisionEvent (when DecObserver is set) showing what
+// it decided — Allow/Deny/Ask on a short-circuit, Skipped when it defers to
+// the next layer. Short-circuit means lower layers do not fire, so a single
+// Evaluate call emits exactly the layers that ran.
 func (e *Engine) Evaluate(ctx context.Context, call openagent.ToolCall, def openagent.FunctionDefinition, session openagent.Session) (Decision, error) {
+	ri := openagent.RunInfoFromContext(ctx)
+	// call (call.ID) and session (session.ID) are both Evaluate-scoped, so
+	// the direct emit stamps the full four-tuple join key (session_id, run_id,
+	// turn_id, call_id) explicitly — the ObserveDecision helper is bypassed
+	// because the Engine talks to its DecObserver field directly.
+	emit := func(layer, outcome string, detail map[string]any) {
+		if e.DecObserver != nil {
+			e.DecObserver.ObserveDecision(ctx, openagent.DecisionEvent{
+				Layer: layer, Outcome: outcome, Subject: call.Function.Name,
+				Detail: detail, RunID: ri.RunID, TurnID: ri.TurnID,
+				ParentRunID: ri.ParentRunID, SessionID: session.ID, CallID: call.ID,
+			})
+		}
+	}
+
 	// 1) Rules layer.
 	for _, rule := range e.Rules {
 		if !matchesRule(rule, call) {
 			continue
 		}
 		if rule.Action == Ask {
+			emit(openagent.DecisionPolicyRule, openagent.OutcomeAsk, map[string]any{"reason": rule.Reason})
 			return e.askHuman(ctx, call, def, session, rule.Reason)
 		}
+		emit(openagent.DecisionPolicyRule, string(rule.Action), map[string]any{"reason": rule.Reason})
 		return Decision{Action: rule.Action, Reason: rule.Reason}, nil
+	}
+	// No rule matched: rules layer defers. (A matched rule always returns
+	// inside the loop, so reaching here means no match.) Emit Skipped only
+	// when rules were configured — an empty Rules slice is an absent layer.
+	if len(e.Rules) > 0 {
+		emit(openagent.DecisionPolicyRule, openagent.OutcomeSkipped, nil)
 	}
 
 	// 2) Safety layer: read-only tools auto-allow.
 	if e.Safety != nil {
 		if e.Safety.Classify(def) == ReadOnly {
+			emit(openagent.DecisionPolicySafety, openagent.OutcomeAllow, map[string]any{"classifier": "readonly"})
 			return Decision{Action: Allow, Reason: "read-only tool"}, nil
 		}
+		emit(openagent.DecisionPolicySafety, openagent.OutcomeSkipped, nil)
 	}
 
 	// 3) Memory layer: remembered decision for this call (tool + args —
@@ -202,16 +245,21 @@ func (e *Engine) Evaluate(ctx context.Context, call openagent.ToolCall, def open
 				}
 			}
 			if all {
+				emit(openagent.DecisionPolicyMemory, openagent.OutcomeHit, map[string]any{"mode": "multi-key", "keys": len(keys)})
 				return Decision{Action: Allow, Reason: "remembered"}, nil
 			}
+			emit(openagent.DecisionPolicyMemory, openagent.OutcomeMiss, map[string]any{"mode": "multi-key", "keys": len(keys)})
 		} else {
 			key := ApprovalKey(call.Function.Name, json.RawMessage(call.Function.Arguments))
 			if d, ok := e.Memory.Recall(ctx, session.ID, key); ok {
 				if d.Action == Ask {
+					emit(openagent.DecisionPolicyMemory, openagent.OutcomeAsk, map[string]any{"mode": "single"})
 					return e.askHuman(ctx, call, def, session, "remembered ask")
 				}
+				emit(openagent.DecisionPolicyMemory, openagent.OutcomeHit, map[string]any{"mode": "single", "action": string(d.Action)})
 				return d, nil
 			}
+			emit(openagent.DecisionPolicyMemory, openagent.OutcomeMiss, map[string]any{"mode": "single"})
 		}
 	}
 
@@ -220,7 +268,22 @@ func (e *Engine) Evaluate(ctx context.Context, call openagent.ToolCall, def open
 }
 
 // askHuman routes to the human layer. A nil human fails closed (Deny).
+// Emits one DecisionPolicyHuman event — Ask when escalating to a human,
+// Deny when no approver is configured (fail closed).
 func (e *Engine) askHuman(ctx context.Context, call openagent.ToolCall, def openagent.FunctionDefinition, session openagent.Session, reason string) (Decision, error) {
+	if e.DecObserver != nil {
+		ri := openagent.RunInfoFromContext(ctx)
+		outcome := openagent.OutcomeAsk
+		if e.Human == nil {
+			outcome = openagent.OutcomeDeny
+		}
+		e.DecObserver.ObserveDecision(ctx, openagent.DecisionEvent{
+			Layer: openagent.DecisionPolicyHuman, Outcome: outcome,
+			Subject: call.Function.Name, Detail: map[string]any{"reason": reason},
+			RunID: ri.RunID, TurnID: ri.TurnID,
+			ParentRunID: ri.ParentRunID, SessionID: session.ID, CallID: call.ID,
+		})
+	}
 	if e.Human == nil {
 		return Decision{Action: Deny, Reason: reason + " (no approver configured)"}, nil
 	}

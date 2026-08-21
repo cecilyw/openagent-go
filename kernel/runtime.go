@@ -289,7 +289,22 @@ func (rt *Runtime) policy() governance.Policy {
 		governance.NewToolClassifier(), // platform-side read-only classification
 		rt.approvalMemory,              // session-scoped approval memory ("allow always")
 		humanApprover,
-	)
+	).WithDecisionObserver(rt.decisionObserver())
+}
+
+// decisionObserver returns the configured RunObserver as a DecisionObserver,
+// or nil when none is configured or it does not implement DecisionObserver.
+// The Engine observes per-layer events only when this is non-nil; custom
+// Policy impls are wrapped by observingPolicy in execute.go with the same
+// value. Extracting it here keeps the type-assertion in one place.
+func (rt *Runtime) decisionObserver() openagent.DecisionObserver {
+	if rt.deps.Observer == nil {
+		return nil
+	}
+	if d, ok := rt.deps.Observer.(openagent.DecisionObserver); ok {
+		return d
+	}
+	return nil
 }
 
 // allowAllPolicy is the no-approver policy: every call executes.

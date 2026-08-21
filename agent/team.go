@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	openagent "github.com/yusheng-g/openagent-go"
 )
 
@@ -311,6 +312,7 @@ type TeamResult struct {
 	HandoffChain []HandoffEntry  // all handoffs that occurred
 	TotalTurns   int             // total model calls across all agents
 	Usage        openagent.Usage // total token usage
+	RunID        string          // #1: the team-level run ID; joins all child agent RunResults via their ParentRunID
 }
 
 // Run executes the team on a user input. It routes to the first agent, then
@@ -353,6 +355,7 @@ type TeamEvent struct {
 	ToolCall   *openagent.ToolCall // tool_call
 	Result     *TeamResult
 	Error      error
+	RunID      string // #1: the team-level run ID (same across all events in one team run)
 }
 
 // RunStream executes the team with streaming events.
@@ -361,12 +364,12 @@ func (t *Team) RunStream(ctx context.Context, session openagent.Session, input o
 	go func() {
 		defer close(ch)
 		if len(t.agents) == 0 {
-			ch <- TeamEvent{Type: TeamError, Error: fmt.Errorf("team has no agents")}
+			ch <- TeamEvent{Type: TeamError, Error: fmt.Errorf("team has no agents"), RunID: ""}
 			return
 		}
 		tr := &teamRunner{team: t}
 		if _, err := tr.run(ctx, session, input, ch); err != nil {
-			ch <- TeamEvent{Type: TeamError, Error: err}
+			ch <- TeamEvent{Type: TeamError, Error: err, RunID: tr.runID}
 		}
 	}()
 	return ch
@@ -383,21 +386,52 @@ type teamRunner struct {
 	totalUsage  openagent.Usage
 	forceFinal  bool   // true = next agent gets no transfer tools
 	currentName string // currently executing agent
+	runID       string // #1: team-level run ID; child agents' kernel.run() reads it as ParentRunID
 
 	// Per-run handoff queue — isolated from concurrent Team.Run() calls.
 	handoffMu       sync.Mutex
 	pendingHandoffs []handoffRequest
 }
 
+// observeStage stamps the team-level RunID/TurnID/ParentRunID onto a StageEvent
+// before forwarding it to the team observer. The 5 direct ObserveStage sites
+// in run() bypass this helper otherwise — without it their events carry empty
+// RunID/ParentRunID and cannot be joined to the child-agent trajectory.
+// TurnID is -1 (Team has no turn loop; the handoff index is in Detail).
+func (tr *teamRunner) observeStage(ctx context.Context, ev openagent.StageEvent) {
+	if tr.team.observer == nil {
+		return
+	}
+	ri := openagent.RunInfoFromContext(ctx)
+	ev.RunID = ri.RunID
+	if ev.RunID == "" {
+		ev.RunID = tr.runID
+	}
+	ev.TurnID = -1
+	ev.ParentRunID = ri.ParentRunID
+	tr.team.observer.ObserveStage(ctx, ev)
+}
+
 func (tr *teamRunner) run(ctx context.Context, session openagent.Session, input openagent.Message, ch chan<- TeamEvent) (*TeamResult, error) {
+	// ── Generate team-level run ID ──
+	// #1: The team is one logical run; every child agent's kernel.run() reads
+	// this RunID as its ParentRunID (prev.RunID below), so a 3-agent team's
+	// trajectories can be reassembled into one team run. Preserve the
+	// grandparent's RunID (if this team was launched from an orchestrator) by
+	// reading the incoming ctx BEFORE re-stamping — WithRunInfo shadows, so
+	// reading after would lose it. TurnID -1: Team has no turn loop.
+	tr.runID = uuid.NewString()
+	prev := openagent.RunInfoFromContext(ctx)
+	ctx = openagent.WithRunInfo(ctx, openagent.RunInfo{RunID: tr.runID, TurnID: -1, ParentRunID: prev.RunID})
+
 	// ── Resolve first agent ──
 	agentInfos := tr.agentInfos()
 	rr, err := tr.team.router.Route(ctx, input, agentInfos)
 	if err != nil {
 		return nil, fmt.Errorf("router: %w", err)
 	}
-	if rr.Fallback && tr.team.observer != nil {
-		tr.team.observer.ObserveStage(ctx, openagent.StageEvent{
+	if rr.Fallback {
+		tr.observeStage(ctx, openagent.StageEvent{
 			Name: openagent.StageTeamRoute, Phase: "leave",
 			Detail: map[string]any{"agent": rr.Agent, "fallback": rr.Reason},
 		})
@@ -425,14 +459,12 @@ func (tr *teamRunner) run(ctx context.Context, session openagent.Session, input 
 
 		// ── Emit agent_start ──
 		if ch != nil {
-			ch <- TeamEvent{Type: TeamAgentStart, Agent: tr.currentName}
+			ch <- TeamEvent{Type: TeamAgentStart, Agent: tr.currentName, RunID: tr.runID}
 		}
-		if tr.team.observer != nil {
-			tr.team.observer.ObserveStage(ctx, openagent.StageEvent{
-				Name: openagent.StageTeamAgent, Phase: "enter",
-				Detail: map[string]any{"agent": tr.currentName, "handoff_index": len(tr.chain)},
-			})
-		}
+		tr.observeStage(ctx, openagent.StageEvent{
+			Name: openagent.StageTeamAgent, Phase: "enter",
+			Detail: map[string]any{"agent": tr.currentName, "handoff_index": len(tr.chain)},
+		})
 
 		// ── Run agent (full loop) ──
 		var result *openagent.RunResult
@@ -448,15 +480,13 @@ func (tr *teamRunner) run(ctx context.Context, session openagent.Session, input 
 
 		if runErr != nil {
 			// Agent run failed — emit agent_end with error and return.
-			if tr.team.observer != nil {
-				tr.team.observer.ObserveStage(ctx, openagent.StageEvent{
-					Name: openagent.StageTeamAgent, Phase: "leave",
-					Detail: map[string]any{"agent": tr.currentName},
-					Err:    runErr,
-				})
-			}
+			tr.observeStage(ctx, openagent.StageEvent{
+				Name: openagent.StageTeamAgent, Phase: "leave",
+				Detail: map[string]any{"agent": tr.currentName},
+				Err:    runErr,
+			})
 			if ch != nil {
-				ch <- TeamEvent{Type: TeamAgentEnd, Agent: tr.currentName, Error: runErr}
+				ch <- TeamEvent{Type: TeamAgentEnd, Agent: tr.currentName, Error: runErr, RunID: tr.runID}
 			}
 			return nil, fmt.Errorf("agent %q: %w", tr.currentName, runErr)
 		}
@@ -497,27 +527,23 @@ func (tr *teamRunner) run(ctx context.Context, session openagent.Session, input 
 
 		if len(handoffs) == 0 {
 			// Agent finished without handing off — its response is final.
-			if tr.team.observer != nil {
-				tr.team.observer.ObserveStage(ctx, openagent.StageEvent{
-					Name: openagent.StageTeamAgent, Phase: "leave",
-					Detail: map[string]any{"agent": tr.currentName},
-				})
-			}
+			tr.observeStage(ctx, openagent.StageEvent{
+				Name: openagent.StageTeamAgent, Phase: "leave",
+				Detail: map[string]any{"agent": tr.currentName},
+			})
 			if ch != nil {
-				ch <- TeamEvent{Type: TeamAgentEnd, Agent: tr.currentName}
+				ch <- TeamEvent{Type: TeamAgentEnd, Agent: tr.currentName, RunID: tr.runID}
 			}
 			return tr.finalize(result.FinalOutput, ch), nil
 		}
 
 		// Emit agent_end before transitioning to the next agent.
-		if tr.team.observer != nil {
-			tr.team.observer.ObserveStage(ctx, openagent.StageEvent{
-				Name: openagent.StageTeamAgent, Phase: "leave",
-				Detail: map[string]any{"agent": tr.currentName},
-			})
-		}
+		tr.observeStage(ctx, openagent.StageEvent{
+			Name: openagent.StageTeamAgent, Phase: "leave",
+			Detail: map[string]any{"agent": tr.currentName},
+		})
 		if ch != nil {
-			ch <- TeamEvent{Type: TeamAgentEnd, Agent: tr.currentName}
+			ch <- TeamEvent{Type: TeamAgentEnd, Agent: tr.currentName, RunID: tr.runID}
 		}
 
 		// Take the first handoff from this agent run.
@@ -600,7 +626,7 @@ func (tr *teamRunner) run(ctx context.Context, session openagent.Session, input 
 
 		// ── Emit handoff event ──
 		if ch != nil {
-			ch <- TeamEvent{Type: TeamHandoff, Agent: tr.currentName, Target: req.target, Message: req.message}
+			ch <- TeamEvent{Type: TeamHandoff, Agent: tr.currentName, Target: req.target, Message: req.message, RunID: tr.runID}
 		}
 
 		tr.currentName = req.target
@@ -624,10 +650,10 @@ func (tr *teamRunner) runAgentStreaming(ctx context.Context, runner AgentRunner,
 		}
 		switch evt.Type {
 		case openagent.StreamThought:
-			ch <- TeamEvent{Type: TeamThought, Agent: tr.currentName, Text: evt.Text}
+			ch <- TeamEvent{Type: TeamThought, Agent: tr.currentName, Text: evt.Text, RunID: tr.runID}
 
 		case openagent.StreamTextDelta:
-			ch <- TeamEvent{Type: TeamTextDelta, Agent: tr.currentName, Text: evt.Text}
+			ch <- TeamEvent{Type: TeamTextDelta, Agent: tr.currentName, Text: evt.Text, RunID: tr.runID}
 
 		case openagent.StreamToolCall:
 			// Only forward non-handoff tool calls to the UI.
@@ -635,21 +661,21 @@ func (tr *teamRunner) runAgentStreaming(ctx context.Context, runner AgentRunner,
 				tc := &evt.Message.ToolCalls[0]
 				toolCallNames[tc.ID] = tc.Function.Name
 				if !strings.HasPrefix(tc.Function.Name, "transfer_to_") {
-					ch <- TeamEvent{Type: TeamToolCall, Agent: tr.currentName, ToolCall: tc}
+					ch <- TeamEvent{Type: TeamToolCall, Agent: tr.currentName, ToolCall: tc, RunID: tr.runID}
 				}
 			}
 
 		case openagent.StreamToolProgress:
-			ch <- TeamEvent{Type: TeamToolProgress, Agent: tr.currentName, ToolCallID: evt.ToolCallID, Text: evt.Text}
+			ch <- TeamEvent{Type: TeamToolProgress, Agent: tr.currentName, ToolCallID: evt.ToolCallID, Text: evt.Text, RunID: tr.runID}
 
 		case openagent.StreamToolResult:
 			// Filter results of handoff tools by matching ToolCallID.
 			if !strings.HasPrefix(toolCallNames[evt.Message.ToolCallID], "transfer_to_") {
-				ch <- TeamEvent{Type: TeamToolResult, Agent: tr.currentName, ToolCallID: evt.Message.ToolCallID, Text: evt.Message.Content}
+				ch <- TeamEvent{Type: TeamToolResult, Agent: tr.currentName, ToolCallID: evt.Message.ToolCallID, Text: evt.Message.Content, RunID: tr.runID}
 			}
 
 		case openagent.StreamRetrying:
-			ch <- TeamEvent{Type: TeamRetrying, Agent: tr.currentName, Error: evt.Error}
+			ch <- TeamEvent{Type: TeamRetrying, Agent: tr.currentName, Error: evt.Error, RunID: tr.runID}
 
 		case openagent.StreamDone:
 			result = evt.Result
@@ -847,9 +873,10 @@ func (tr *teamRunner) finalize(output string, ch chan<- TeamEvent) *TeamResult {
 		HandoffChain: tr.chain,
 		TotalTurns:   tr.totalTurns,
 		Usage:        tr.totalUsage,
+		RunID:        tr.runID,
 	}
 	if ch != nil {
-		ch <- TeamEvent{Type: TeamDone, Result: r}
+		ch <- TeamEvent{Type: TeamDone, Result: r, RunID: tr.runID}
 	}
 	return r
 }

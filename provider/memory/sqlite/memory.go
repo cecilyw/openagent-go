@@ -107,7 +107,7 @@ func (m *Memory) Store(ctx context.Context, scope ctxpkg.ContextScope, item ctxp
 				return fmt.Errorf("sqlite knowledge store: %w", err)
 			}
 			slog.Debug("openagent: knowledge stored (update)", "id", id, "kind", item.Kind, "topic", item.Topic)
-			m.indexEmbedding(ctx, id, item.Content)
+			m.indexEmbedding(ctx, id, item.Content, knowledgeSubject(item))
 			return nil
 		}
 	}
@@ -124,21 +124,46 @@ func (m *Memory) Store(ctx context.Context, scope ctxpkg.ContextScope, item ctxp
 
 	if id > 0 {
 		slog.Debug("openagent: knowledge stored (insert)", "id", id, "kind", item.Kind, "topic", item.Topic)
-		m.indexEmbedding(ctx, id, item.Content)
+		m.indexEmbedding(ctx, id, item.Content, knowledgeSubject(item))
 	}
 	return nil
 }
 
 // indexEmbedding refreshes the vector index for a knowledge row.
 // Best-effort: an absent embedder is a no-op, but a failure is logged —
-// a stale vector would silently return outdated content on recall.
-func (m *Memory) indexEmbedding(ctx context.Context, id int64, content string) {
+// a stale vector would silently return outdated content on recall. The
+// DecisionExtractor event reports the outcome of this extraction step so a
+// consumer can tell a stored-with-vector from a stored-without-vector or a
+// failed-embedding (the row is persisted either way — this is best-effort).
+func (m *Memory) indexEmbedding(ctx context.Context, id int64, content, subject string) {
+	obs := openagent.DecisionObserverFromContext(ctx)
+	ri := openagent.RunInfoFromContext(ctx)
+	// This leaf has no session param, so stamp SessionID directly from ctx —
+	// the kernel's WithSession (run.go) plumbs the session down through
+	// context/runtime Build → MemoryProvider.Store. The free ObserveDecision
+	// helper is NOT in the call path (it takes a RunObserver; obs here is the
+	// DecisionObserver extracted from ctx), so SessionID must be set here, not
+	// left for the helper. CallID stays blank: extraction is not a tool call.
+	sessionID := ""
+	if s, ok := openagent.SessionFromContext(ctx); ok {
+		sessionID = s.ID
+	}
+	emit := func(outcome string, detail map[string]any) {
+		if obs != nil {
+			obs.ObserveDecision(ctx, openagent.DecisionEvent{
+				Layer: openagent.DecisionExtractor, Outcome: outcome, Subject: subject,
+				Detail: detail, RunID: ri.RunID, TurnID: ri.TurnID,
+				ParentRunID: ri.ParentRunID, SessionID: sessionID,
+			})
+		}
+	}
 	if m.embedder == nil || id <= 0 {
+		emit(openagent.OutcomeSkipped, map[string]any{"id": id, "reason": "no embedder or no row id"})
 		return
 	}
 	vec, err := m.embedder.Embed(ctx, content)
 	if err != nil {
-		slog.Warn("openagent: knowledge embedding failed", "id", id, "error", err)
+		emit(openagent.OutcomeFailed, map[string]any{"id": id, "error": err.Error()})
 		return
 	}
 	buf := floatsToBytes(vec)
@@ -146,9 +171,9 @@ func (m *Memory) indexEmbedding(ctx context.Context, id int64, content string) {
 		`INSERT OR REPLACE INTO knowledge_vectors (knowledge_id, embedding) VALUES (?, ?)`,
 		id, buf,
 	); err != nil {
-		slog.Warn("openagent: knowledge vector write failed", "id", id, "error", err)
+		emit(openagent.OutcomeFailed, map[string]any{"id": id, "dim": len(vec), "error": err.Error()})
 	} else {
-		slog.Debug("openagent: knowledge vector indexed", "id", id, "dim", len(vec))
+		emit(openagent.OutcomeStored, map[string]any{"id": id, "dim": len(vec)})
 	}
 }
 
@@ -158,15 +183,50 @@ func (m *Memory) knowledgeRecall(ctx context.Context, scope ctxpkg.ContextScope,
 	if limit <= 0 {
 		limit = 5
 	}
-	// Semantic recall first: cosine-ranked by the configured embedder.
+	// DecisionObserver + RunInfo are plumbed through ctx by the context
+	// runtime (Build) — a leaf provider emits without holding a struct
+	// field. nil = silent (no observer, or ctx not prepared by a run).
+	obs := openagent.DecisionObserverFromContext(ctx)
+	ri := openagent.RunInfoFromContext(ctx)
+	// Same stamping policy as indexEmbedding: ParentRunID direct (joins
+	// team/orchestrator), SessionID stamped directly from ctx (the free
+	// ObserveDecision helper is NOT in the call path — it takes a RunObserver;
+	// obs here is the DecisionObserver from ctx — so SessionID must be set
+	// here, not left for the helper). WithSession plumbs session down via
+	// context/runtime Build → MemoryProvider.Recall. CallID blank (recall is
+	// not a tool call).
+	sessionID := ""
+	if s, ok := openagent.SessionFromContext(ctx); ok {
+		sessionID = s.ID
+	}
+	emit := func(layer, outcome string, detail map[string]any) {
+		if obs != nil {
+			obs.ObserveDecision(ctx, openagent.DecisionEvent{
+				Layer: layer, Outcome: outcome, Subject: query,
+				Detail: detail, RunID: ri.RunID, TurnID: ri.TurnID,
+				ParentRunID: ri.ParentRunID, SessionID: sessionID,
+			})
+		}
+	}
+	// Semantic recall first: cosine-ranked by the configured embedder. All
+	// three outcomes emit so a consumer can tell a tried-and-missed vector
+	// path (fell through to keyword) from an unconfigured one (no embedder
+	// = no event at all).
 	if m.embedder != nil {
-		if entries, err := m.knowledgeVectorRecall(ctx, scope, query, limit); err == nil && len(entries) > 0 {
+		entries, err := m.knowledgeVectorRecall(ctx, scope, query, limit)
+		if err != nil {
+			emit(openagent.DecisionVectorRecall, openagent.OutcomeFailed, map[string]any{"error": err.Error()})
+		} else if len(entries) > 0 {
+			emit(openagent.DecisionVectorRecall, openagent.OutcomeHit, map[string]any{"count": len(entries), "top_score": entries[0].Score})
 			return entries, nil
+		} else {
+			emit(openagent.DecisionVectorRecall, openagent.OutcomeMiss, nil)
 		}
 	}
 	// Fallback: keyword LIKE matching.
 	words := knowledgeKeywords(query)
 	if len(words) == 0 {
+		emit(openagent.DecisionKeywordRecall, openagent.OutcomeMiss, map[string]any{"reason": "no keywords"})
 		return nil, nil
 	}
 	// Build OR-ed LIKE clauses for the keywords.
@@ -220,7 +280,16 @@ func (m *Memory) knowledgeRecall(ctx context.Context, scope ctxpkg.ContextScope,
 			Score:   score,
 		})
 	}
-	return entries, rows.Err()
+	if err := rows.Err(); err != nil {
+		emit(openagent.DecisionKeywordRecall, openagent.OutcomeFailed, map[string]any{"error": err.Error()})
+		return nil, err
+	}
+	if len(entries) == 0 {
+		emit(openagent.DecisionKeywordRecall, openagent.OutcomeMiss, nil)
+	} else {
+		emit(openagent.DecisionKeywordRecall, openagent.OutcomeHit, map[string]any{"count": len(entries)})
+	}
+	return entries, nil
 }
 
 // knowledgeVectorRecall ranks knowledge items by cosine similarity to the
@@ -294,6 +363,16 @@ func (m *Memory) knowledgeVectorRecall(ctx context.Context, scope ctxpkg.Context
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// knowledgeSubject returns the DecisionEvent subject for a stored item:
+// the topic when set (the extractor's "update" key), else the kind. Gives
+// an observer a stable handle on what was extracted/indexed.
+func knowledgeSubject(item ctxpkg.MemoryItem) string {
+	if item.Topic != "" {
+		return item.Topic
+	}
+	return string(item.Kind)
 }
 
 // knowledgeKeywords tokenizes a recall query into keywords: latin

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -382,25 +381,22 @@ func buildGuard(model openagent.Model) *llm.Guard {
 	return llm.New(model)
 }
 
-// buildSlogHooks creates slog-based RunHooks.
+// buildSlogHooks creates slog-based RunHooks (the lifecycle axis).
 func buildSlogHooks() openagent.RunHooks {
 	return sloghooks.New(slog.Default())
 }
 
-// slogObserver logs stage events to a dedicated stderr logger.
-type slogObserver struct {
-	logger *slog.Logger
-}
-
-func (o slogObserver) ObserveStage(_ context.Context, event openagent.StageEvent) {
-	o.logger.Debug("stage", "name", event.Name, "phase", event.Phase, "duration", event.Duration)
-}
-
-// buildSlogObserver creates a minimal stderr stage observer.
+// buildSlogObserver creates the observation-axis slog Observer (stage
+// boundaries + decision events) backed by slog.Default(). The lifecycle-axis
+// Hooks are wired separately by buildSlogHooks; both share slog.Default() so
+// a single handler config (rotated file / discard / never stderr — stderr is
+// the ACP control pipe) governs both axes. Returning *sloghooks.Observer
+// (which implements DecisionObserver) lets the kernel's decision dispatch
+// type-assert succeed, so DecisionEvents reach the slog sink in HTTP/run mode
+// — the old private slogObserver implemented only ObserveStage and silently
+// dropped every DecisionEvent.
 func buildSlogObserver() openagent.RunObserver {
-	return slogObserver{
-		logger: slog.Default(),
-	}
+	return sloghooks.NewObserver(slog.Default())
 }
 
 // buildOpts appends capability-gated agent options (skills, guard) to opts

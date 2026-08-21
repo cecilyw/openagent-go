@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
+
 	openagent "github.com/yusheng-g/openagent-go"
 	ctxpkg "github.com/yusheng-g/openagent-go/context"
 	"github.com/yusheng-g/openagent-go/eventbus"
@@ -45,6 +47,34 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 
 	result := &openagent.RunResult{}
 	rt.state.SessionID = session.ID
+
+	// Trajectory identity: every StageEvent/DecisionEvent this run emits is
+	// stamped with runID so consumers can reassemble the full trajectory
+	// (and join it to this RunResult at the end). TurnID starts at -1
+	// (pre-loop: guard.in, input commit) and is updated to the real turn
+	// index at the top of each loop iteration. Inject the DecisionObserver
+	// (if the configured RunObserver also implements it) into ctx so leaf
+	// packages — context/, provider/ — can emit decision events without a
+	// struct field, mirroring the SessionFromContext pattern.
+	//
+	// ParentRunID link: a team/orchestrator run stamps its own RunID into
+	// ctx before calling the child's run(); the child must read it BEFORE
+	// re-stamping its own RunID, because WithRunInfo shadows (replaces) the
+	// ctx value rather than merging. Preserving it here lets every child
+	// event carry the parent's RunID, so a multi-agent trajectory reassembles
+	// via (parent_run_id → child RunID/ParentRunID). Empty for solo runs.
+	// WithSession injects the session so leaf packages that have no session
+	// in scope (governance/context/prepare/provider) recover it via
+	// SessionFromContext for the DecisionEvent.SessionID join key.
+	runID := uuid.NewString()
+	result.RunID = runID
+	prev := openagent.RunInfoFromContext(ctx)
+	result.ParentRunID = prev.RunID
+	ctx = openagent.WithRunInfo(ctx, openagent.RunInfo{RunID: runID, TurnID: -1, ParentRunID: prev.RunID})
+	ctx = openagent.WithSession(ctx, session)
+	if d, ok := rt.deps.Observer.(openagent.DecisionObserver); ok {
+		ctx = openagent.WithDecisionObserver(ctx, d)
+	}
 
 	// Guard.in BEFORE persisting the input: a blocked input must never
 	// reach the store — it would be re-read into the model's context next
@@ -91,6 +121,12 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 	// ── Main loop ──
 	for turn := 0; turn < maxTurns; turn++ {
 		result.TurnCount = turn + 1
+		// Refresh RunInfo so this turn's events carry the correct TurnID.
+		// RunID is stable across the run; only TurnID changes per iteration.
+		// ParentRunID is read back from ctx (stamped once at run() entry)
+		// so it survives the per-turn re-stamp — WithRunInfo shadows.
+		ri := openagent.RunInfoFromContext(ctx)
+		ctx = openagent.WithRunInfo(ctx, openagent.RunInfo{RunID: runID, TurnID: turn, ParentRunID: ri.ParentRunID})
 		// Cancel compensation: persist unresolved tool results.
 		if ctx.Err() != nil {
 			rt.cancelCompensation(ctx, session, workingMessages, ch)
@@ -363,11 +399,14 @@ func (rt *Runtime) logEvent(ctx context.Context, sessionID string, typ eventbus.
 	if rt.deps.EventLogger == nil {
 		return
 	}
+	ri := openagent.RunInfoFromContext(ctx)
 	rt.deps.EventLogger.Append(ctx, eventbus.Event{
 		SessionID: sessionID,
 		Type:      typ,
 		Payload:   payload,
 		Metadata:  meta,
+		RunID:     ri.RunID,
+		TurnID:    ri.TurnID,
 	})
 }
 
@@ -461,7 +500,10 @@ func (rt *Runtime) checkHandoff(calls []openagent.ToolCall, results []openagent.
 	return false
 }
 
-// observe emits a stage event to the observer (no-op if none).
+// observe emits a stage event to the observer (no-op if none). StageEvent
+// is stamped with the RunID/TurnID recovered from ctx so every event groups
+// into its run trajectory; events emitted before the turn loop (guard.in,
+// input commit) carry TurnID=-1.
 func (rt *Runtime) observe(ctx context.Context, stage string, phase string, detail map[string]any, start time.Time, err error) {
 	if rt.deps.Observer == nil {
 		return
@@ -474,12 +516,16 @@ func (rt *Runtime) observe(ctx context.Context, stage string, phase string, deta
 	if !start.IsZero() {
 		d = time.Since(start)
 	}
+	ri := openagent.RunInfoFromContext(ctx)
 	rt.deps.Observer.ObserveStage(ctx, openagent.StageEvent{
-		Name:     stage,
-		Phase:    phase,
-		Detail:   detail,
-		Duration: d,
-		Err:      err,
+		Name:        stage,
+		Phase:       phase,
+		Detail:      detail,
+		Duration:    d,
+		Err:         err,
+		RunID:       ri.RunID,
+		TurnID:      ri.TurnID,
+		ParentRunID: ri.ParentRunID,
 	})
 }
 

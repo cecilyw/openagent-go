@@ -21,6 +21,12 @@ type executor struct {
 	agentInfos []agent.AgentInfo
 	model      openagent.Model // for summarisation
 	sessionID  string          // base session id for step isolation
+	// planRunID is the plan-level run ID (#1): stable across replan
+	// (all replan steps join the same planRunID) and resume (read back
+	// from PlanState.PlanRunID). Stamped on ctx by Plan.execute so each
+	// step's child kernel.run() reads it as ParentRunID; echoed in
+	// PlanResult.PlanRunID by buildResult.
+	planRunID string
 }
 
 // ── Entry point ──
@@ -84,7 +90,7 @@ func (e *executor) execute(ctx context.Context, def *PlanDef, state *PlanState, 
 					StepID: gateStepID,
 				}
 			}
-			return &PlanResult{Usage: totalUsage}, nil // paused — caller can resume via ExecuteWithState
+			return &PlanResult{Usage: totalUsage, PlanRunID: e.planRunID}, nil // paused — caller can resume via ExecuteWithState
 		}
 
 		// Check for failures.
@@ -178,7 +184,7 @@ func (e *executor) executeBatches(ctx context.Context, def *PlanDef, state *Plan
 		totalUsage.TotalTokens += batchUsage.TotalTokens
 		if batchFailed {
 			// A step failed — stop batch execution, let caller check and replan.
-			return &PlanResult{Usage: *totalUsage}, "", nil
+			return &PlanResult{Usage: *totalUsage, PlanRunID: e.planRunID}, "", nil
 		}
 
 		// Check if any completed step in this batch is a gate.
@@ -370,6 +376,12 @@ func (e *executor) executeStep(ctx context.Context, stepID string, state *PlanSt
 		sr.Usage = result.Usage
 		sr.Error = ""
 		sr.EndTime = time.Now()
+		// #1: capture the child agent's run ID so the step result joins
+		// its agent trajectory (RunResult.RunID). result.ParentRunID ==
+		// e.planRunID (the child kernel.run() read the plan-stamped ctx
+		// as its ParentRunID) — a consumer reassembles by filtering
+		// child events on ParentRunID == PlanResult.PlanRunID.
+		sr.RunID = result.RunID
 
 		if eventCh != nil {
 			eventCh <- PlanEvent{Type: PlanEventStepDone, StepID: stepID, Agent: step.Agent, Result: sr}
@@ -606,6 +618,12 @@ func (e *executor) buildResult(def *PlanDef, state *PlanState, usage openagent.U
 		Steps:       steps,
 		Usage:       usage,
 		ReplanCount: state.ReplanCount,
+		// #1: echo the plan-level run ID so a consumer can filter all
+		// child DecisionEvents/StageEvents by ParentRunID == PlanRunID.
+		// Stable across replan (the replan loop reuses this executor
+		// instance, so planRunID is unchanged) and resume (ExecuteWithState
+		// re-stamps ctx with state.PlanRunID before re-entering execute).
+		PlanRunID: e.planRunID,
 	}
 }
 

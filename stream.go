@@ -10,6 +10,8 @@ type RunResult struct {
 	Usage         Usage  // total tokens used
 	ContextWindow int    // model's context window size (0 if unknown)
 	StopReason    string // "end_turn", "refusal", "cancelled", etc. (ACP agents)
+	RunID         string // trajectory grouping key — joins this result with its StageEvent/DecisionEvent stream
+	ParentRunID   string // #1: the enclosing run's RunID (team/orchestrator); empty for solo runs
 }
 
 // ── Stream events ──

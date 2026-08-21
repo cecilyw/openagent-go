@@ -75,6 +75,11 @@ type StepResult struct {
 	Usage       openagent.Usage `json:"usage"`           // token usage from this step
 	StartTime   time.Time       `json:"start_time"`
 	EndTime     time.Time       `json:"end_time"`
+	// RunID is the child agent's run ID for this step (#1). Joins the
+	// step to its agent trajectory via RunResult.RunID; the child's
+	// ParentRunID points back to the plan's PlanRunID. Blank when the
+	// step failed before producing a RunResult.
+	RunID string `json:"run_id,omitempty"`
 }
 
 // PlanState is the runtime state of a plan execution.
@@ -89,6 +94,14 @@ type PlanState struct {
 	ReplanCount int                    `json:"replan_count"`
 	CreatedAt   time.Time              `json:"created_at"`
 	UpdatedAt   time.Time              `json:"updated_at"`
+	// PlanRunID is the plan-level run ID (#1): stable across replan
+	// (all replan steps join the same planRunID) and resume
+	// (ExecuteWithState reads it back so a resumed run joins the original
+	// plan trajectory instead of starting a fresh ID). Set once by
+	// Plan.execute at first entry; left blank by ExecuteWithState when the
+	// caller passes a freshly-constructed state (a resumed run then stamps
+	// a new planRunID, consistent with "resume = new run of the same plan").
+	PlanRunID string `json:"plan_run_id,omitempty"`
 }
 
 // PlanResult is the final output of a plan execution.
@@ -98,6 +111,11 @@ type PlanResult struct {
 	Steps       []StepResult    `json:"steps"` // in execution order
 	Usage       openagent.Usage `json:"usage"`
 	ReplanCount int             `json:"replan_count"`
+	// PlanRunID is the plan-level run ID (#1): joins all step RunIDs via
+	// their ParentRunID and survives replan. Echoed from executor.planRunID
+	// by buildResult. A consumer reassembles the full plan trajectory by
+	// filtering DecisionEvents/StageEvents on ParentRunID == PlanRunID.
+	PlanRunID string `json:"plan_run_id,omitempty"`
 }
 
 // ── Step context (data passed between steps) ──

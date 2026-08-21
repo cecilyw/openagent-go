@@ -19,6 +19,17 @@ type compactionInfo struct {
 	// uses this to decide whether to emit a matching follow-up: when
 	// false, no compaction ran and there is nothing to close.
 	attempted bool
+	// summaryTokens is the token cost of the new summary. The manual /compact
+	// path (CompressAll) sets it from CompressStats; the auto path
+	// (prepareMemory) leaves 0 — compactionOutcome still emits the key so
+	// manual and auto detail share the same shape (a consumer sees 0 and
+	// knows summary cost was not measured for that pass).
+	summaryTokens int
+	// throughIndex is the backend's post-compaction ThroughIndex marker. The
+	// manual path sets it from cc.ThroughIndex; the auto path leaves 0 and
+	// relies on from/to for the range (cc.ThroughIndex == ci.to there, so the
+	// marker adds no information beyond what `to` already carries).
+	throughIndex int
 }
 
 // workingTokenBudget returns the token budget for the working message set.
@@ -159,6 +170,16 @@ func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session,
 				Text: "context compacting...",
 			})
 			ci.attempted = true
+			openagent.ObserveDecision(ctx, rt.deps.Observer, openagent.DecisionEvent{
+				Layer: openagent.DecisionCompactionAuto, Outcome: openagent.OutcomeAttempted,
+				Subject: session.ID, Detail: map[string]any{
+					"overflow": overflow,
+					"total":    len(msgs),
+					"cutoff":   globalCutoff,
+					"prev_ti":  oldTI,
+					"budget":   budget,
+				},
+			})
 			// messages=nil: the backend re-fetches from the session head.
 			// globalCutoff is a GLOBAL message index, but msgs is the
 			// post-summary window — the backend's prefetch branch only
@@ -232,6 +253,17 @@ func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session,
 				// is better than crashing every run.
 				overflow = openagent.SafeCompressionBoundary(msgs, overflow)
 			}
+		}
+		// Emit the auto-compaction outcome — mirrors CompressAll's
+		// Attempted/Failed/Freed/Skipped vocabulary so a consumer treats
+		// manual and auto compaction uniformly. ci.attempted gates this:
+		// no Compact call means no event (the Attempted above didn't fire).
+		if ci.attempted {
+			_, outcome, detail := compactionOutcome(ci)
+			openagent.ObserveDecision(ctx, rt.deps.Observer, openagent.DecisionEvent{
+				Layer: openagent.DecisionCompactionAuto, Outcome: outcome,
+				Subject: session.ID, Detail: detail,
+			})
 		}
 	}
 

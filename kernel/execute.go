@@ -23,6 +23,15 @@ func (rt *Runtime) executeTools(ctx context.Context, session openagent.Session, 
 	results := make([]openagent.Message, len(calls))
 
 	policy := rt.policy()
+	// Custom (non-Engine) Policy impls can't be instrumented per-layer, so
+	// wrap them with observingPolicy to capture ONE aggregate final-outcome
+	// event. The default *governance.Engine already emits deep per-layer
+	// events via its DecObserver field, so it is NOT wrapped (double-counting).
+	if _, isEngine := policy.(*governance.Engine); !isEngine {
+		if obs := rt.decisionObserver(); obs != nil {
+			policy = observingPolicy{inner: policy, obs: obs}
+		}
+	}
 
 	// Phase 1: evaluate all tools sequentially through the policy chain.
 	approved := make([]bool, len(calls))

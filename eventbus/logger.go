@@ -21,12 +21,21 @@ const (
 // Audit / Observability / Replay aids; the conversation store is the
 // source of truth. Payload is intentionally loose (event consumers
 // type-switch), Metadata carries key/value context.
+//
+// RunID/TurnID are stamped from ctx RunInfo by the logEvent helper so a future
+// consumer can join an eventbus Event to the DecisionEvent stream via the
+// (session_id, run_id, turn_id) prefix — call_id stays in Metadata["call_id"].
+// Today the eventbus is in-memory only with zero consumers (BusLogger keeps
+// a bounded history for session-scoped replay and nothing subscribes); the
+// fields are join-ready for when a durable sink is wired.
 type Event struct {
 	SessionID string            `json:"session_id"`
 	Type      EventType         `json:"type"`
 	Timestamp time.Time         `json:"timestamp"`
 	Payload   any               `json:"payload,omitempty"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
+	RunID     string            `json:"run_id,omitempty"`
+	TurnID    int               `json:"turn_id,omitempty"`
 }
 
 // Logger appends audit events. Implementations may publish to an

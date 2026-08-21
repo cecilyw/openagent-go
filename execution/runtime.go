@@ -338,8 +338,14 @@ func (e *ExecutionRuntime) observe(ctx context.Context, stage, phase string, det
 	if e.cfg.Observer == nil {
 		return
 	}
+	// Stamp the trajectory grouping keys from ctx, mirroring kernel.Runtime.observe.
+	// tool.execute events fire from tool-job goroutines; without this they carry
+	// empty RunID/TurnID and break the per-run grouping invariant consumers rely
+	// on to reassemble trajectories.
+	ri := openagent.RunInfoFromContext(ctx)
 	e.cfg.Observer.ObserveStage(ctx, openagent.StageEvent{
 		Name: stage, Phase: phase, Detail: detail, Duration: time.Since(start), Err: err,
+		RunID: ri.RunID, TurnID: ri.TurnID, ParentRunID: ri.ParentRunID,
 	})
 }
 
