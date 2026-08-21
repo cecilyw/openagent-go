@@ -1,7 +1,10 @@
-// Package openai is an openagent built-in embedding backend: an OpenAI-
-// compatible /embeddings API (same wire format served by OpenAI, Ollama,
-// Jina, Cohere, and local gateway proxies). Configure it in settings
-// instead of the built-in BGE embedder to use a hosted embedding model.
+// Package openai is the openagent embedding backend: an OpenAI-compatible
+// /embeddings API (same wire format served by OpenAI, Ollama, Jina, Cohere,
+// and local gateway proxies). It is the only embedding backend — the
+// built-in BGE/ONNX embedder was removed so the default build is pure Go
+// (CGO_ENABLED=0). Configure embedding.* in settings to enable semantic
+// vector recall via this backend; with no embedding config, knowledge
+// recall falls back to keyword search.
 package openai
 
 import (

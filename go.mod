@@ -56,7 +56,6 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/yalue/onnxruntime_go v1.31.0
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zclconf/go-cty v1.18.1 // indirect
 	golang.org/x/crypto v0.54.0 // indirect

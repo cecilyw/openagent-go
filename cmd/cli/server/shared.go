@@ -10,7 +10,6 @@ import (
 	openagent "github.com/yusheng-g/openagent-go"
 	"github.com/yusheng-g/openagent-go/agent"
 	ctxpkg "github.com/yusheng-g/openagent-go/context"
-	"github.com/yusheng-g/openagent-go/embedder/bge"
 	openaiembed "github.com/yusheng-g/openagent-go/embedder/openai"
 	"github.com/yusheng-g/openagent-go/guard/llm"
 	redacthook "github.com/yusheng-g/openagent-go/hooks/redact"
@@ -55,10 +54,11 @@ func buildMemory(emb config.EmbeddingConfig, embedder bool) (*sessionsqlite.Mess
 			// OpenAI, Ollama, Jina, Cohere, local proxies).
 			kmem.WithEmbedder(openaiembed.New(emb.BaseURL, emb.APIKey, emb.Model))
 		} else {
-			// Built-in BGE embedder: semantic knowledge recall
-			// (vector-first, keyword fallback). Zero external deps — the
-			// model ships in the binary.
-			kmem.WithEmbedder(bge.New())
+			// No embedding backend configured: semantic vector recall stays
+			// disabled (Memory falls back to keyword search). The built-in
+			// BGE embedder was removed to keep the default build cgo-free;
+			// configure embedding.provider in settings to enable semantic
+			// recall. WithEmbedder is intentionally NOT called — nil embedder.
 		}
 		knowledge = kmem
 	}

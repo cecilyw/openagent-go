@@ -560,7 +560,7 @@ openagent_pdk::export!(EnvSyncPlugin);
 | `provider/resource/` | 外部参考资料 |
 | `provider/openviking/` | OpenViking 上下文数据库客户端（memory/skill/resource 走 HTTP） |
 | `model/openai/` | OpenAI ChatCompletion + 流式 + 向量嵌入 |
-| `embedder/` | 嵌入后端 — BGE（离线 ONNX Runtime）和 OpenAI 兼容 API |
+| `embedder/` | 嵌入后端 — OpenAI 兼容 /embeddings API（外部 provider；无内嵌模型，默认纯 Go 构建） |
 | `tokenizer/` | tiktoken 模型感知 token 计数（超长文本抽样估算） |
 | `sandbox/native/` | OS 级进程隔离（bwrap/Seatbelt） |
 | `eventbus/` | 会话级发布订阅（SSE） |

@@ -322,7 +322,7 @@ func addCapabilityFlags(cmd *cobra.Command) {
 		{"mcp", "on", "MCP tool servers"},
 		{"guard", "off", "LLM content guard"},
 		{"approver", "off", "Human-in-the-Loop tool approval"},
-		{"embedder", "on", "Built-in BGE embedding (semantic recall)"},
+		{"embedder", "on", "Knowledge store (CRUD + keyword recall; vector recall needs embedding.* config)"},
 	} {
 		cmd.Flags().String(f.name, f.def, f.desc+` ("on" or "off")`)
 	}

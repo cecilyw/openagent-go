@@ -3,18 +3,21 @@ package utils
 import (
 	"fmt"
 	"os"
-	"syscall"
 )
 
-// FileLock is an exclusive advisory lock on a file, backed by flock(2).
+// FileLock is an exclusive advisory lock on a file, backed by flock(2) on
+// Unix and LockFileEx on Windows.
 //
-// The lock is held by the KERNEL on the open file description, not by
-// the file's contents: when the holding process exits — normally, via
+// On Unix the lock is held by the KERNEL on the open file description, not
+// by the file's contents: when the holding process exits — normally, via
 // panic, or SIGKILL — the kernel closes the fd and the lock is released
-// automatically. There is no stale-lock problem, which is why flock
-// beats a PID file for single-instance guarantees. The lock file itself
-// stays behind (its PID content is diagnostics only); the lock state
-// lives in the kernel.
+// automatically. There is no stale-lock problem, which is why flock beats
+// a PID file for single-instance guarantees. The lock file itself stays
+// behind (its PID content is diagnostics only); the lock state lives in
+// the kernel.
+//
+// On Windows the same semantics hold via LockFileEx (exclusive, with the
+// file handle closed on process exit releasing the lock).
 type FileLock struct {
 	f *os.File
 }
@@ -28,7 +31,7 @@ func AcquireFileLock(path string) (*FileLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("file lock: open %s: %w", path, err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockFile(f); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("file lock: %s is held by another process: %w", path, err)
 	}
@@ -52,7 +55,7 @@ func (l *FileLock) Release() {
 	if l == nil || l.f == nil {
 		return
 	}
-	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
+	unlockFile(l.f)
 	_ = l.f.Close()
 	l.f = nil
 }

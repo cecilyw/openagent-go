@@ -295,8 +295,11 @@ func (m *Memory) knowledgeRecall(ctx context.Context, scope ctxpkg.ContextScope,
 // knowledgeVectorRecall ranks knowledge items by cosine similarity to the
 // query embedding.
 func (m *Memory) knowledgeVectorRecall(ctx context.Context, scope ctxpkg.ContextScope, query string, limit int) ([]ctxpkg.MemoryEntry, error) {
-	// Query side: use the embedder's query variant when available (BGE
-	// convention: query instruction prefix), else plain embed.
+	// Query side: use the embedder's query variant when an embedder
+	// implements EmbedQuery (e.g. one that applies a query instruction
+	// prefix), else fall back to plain Embed. The current OpenAI
+	// embedder does not implement EmbedQuery, so the fallback path is
+	// the live one.
 	var qvec []float64
 	var err error
 	if qe, ok := m.embedder.(interface {

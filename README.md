@@ -563,7 +563,7 @@ Full examples: `examples/plugin/`. Rust SDK: `plugin/pdk/rust/`.
 | `provider/resource/` | External reference resources |
 | `provider/openviking/` | OpenViking context database client (memory/skill/resource over HTTP) |
 | `model/openai/` | OpenAI ChatCompletion + streaming + embeddings |
-| `embedder/` | Embedding backends — BGE (offline ONNX Runtime) and OpenAI-compatible API |
+| `embedder/` | Embedding backend — OpenAI-compatible /embeddings API (external provider; no embedded model, pure-Go default build) |
 | `tokenizer/` | tiktoken model-aware token counting (sampled estimate for huge texts) |
 | `sandbox/native/` | OS-level process confinement (bwrap/Seatbelt) |
 | `eventbus/` | Session-scoped pub/sub for SSE |

@@ -76,9 +76,12 @@ type RecallConfig struct {
 }
 
 // EmbeddingConfig selects the semantic-embedding backend for knowledge
-// recall. When empty (or Provider == ""), the built-in BGE embedder
-// (offline, embedded in the binary) is used. Otherwise an OpenAI-
-// compatible embeddings API is called.
+// recall. When empty (or Provider == ""), NO embedding backend is wired:
+// the knowledge store stays open (memory CRUD + keyword search work) but
+// semantic vector recall is disabled. Set provider/base_url/model/api_key
+// to call an OpenAI-compatible /embeddings API (OpenAI, Ollama, Jina,
+// Cohere, or a local proxy) and enable vector recall. There is no embedded
+// model — the default build is pure Go (CGO_ENABLED=0).
 type EmbeddingConfig struct {
 	Provider string `json:"provider,omitempty"` // "openai" (OpenAI-compatible /embeddings)
 	Model    string `json:"model,omitempty"`    // e.g. "text-embedding-3-small"

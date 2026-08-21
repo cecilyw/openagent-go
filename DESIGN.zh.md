@@ -199,7 +199,7 @@ type Embedder interface {
 }
 ```
 
-nil = 降级为 FTS5 搜索。内置 BGE embedder（onnxruntime，离线内嵌二进制）。
+nil = 降级为 FTS5 搜索。embedding 全走外部 provider（OpenAI 兼容 /embeddings API，在 settings 配置）；默认构建纯 Go（CGO_ENABLED=0），无内嵌模型。
 
 ### ② Context Runtime（组装 agent 的输入）
 

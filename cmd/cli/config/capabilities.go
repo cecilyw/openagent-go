@@ -11,7 +11,7 @@ type Capabilities struct {
 	MCP        *bool `json:"mcp,omitempty"`        // default on
 	Guard      *bool `json:"guard,omitempty"`      // default off
 	Approver   *bool `json:"approver,omitempty"`   // default off
-	Embedder   *bool `json:"embedder,omitempty"`   // default on — built-in BGE embedding
+	Embedder   *bool `json:"embedder,omitempty"`   // default on — opens the knowledge store (CRUD + keyword recall); semantic vector recall requires embedding.* config
 }
 
 // on resolves a field against its default.
@@ -22,8 +22,12 @@ func (c Capabilities) on(field *bool, defaultOn bool) bool {
 	return defaultOn
 }
 
-// OnEmbedder reports whether the built-in BGE embedder is enabled
-// (default on: the model is embedded in the binary, zero external deps).
+// OnEmbedder reports whether the knowledge store is enabled (default on).
+// The store provides memory CRUD and keyword recall unconditionally; the
+// embedding.* config gates semantic vector recall — when no embedding
+// provider is configured, the store stays open but vector recall is
+// disabled (keyword-only). The built-in BGE embedder was removed; there
+// is no embedded model and zero native-lib/cgo dependency.
 func (c Capabilities) OnEmbedder() bool { return c.on(c.Embedder, true) }
 
 // OnMemory reports whether Memory is enabled.

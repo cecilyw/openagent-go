@@ -62,12 +62,13 @@ func (stdExecutor) Exec(ctx context.Context, req ExecRequest) ExecResult {
 	// Run in its own process group so the timeout can kill the whole
 	// group — CommandContext's default Cancel only kills the command
 	// itself, leaving children (e.g. a `sh -c "sleep 100 | grep x"`
-	// spawned by the plugin) behind as orphans.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// spawned by the plugin) behind as orphans. applyProcessGroup +
+	// killProcessGroup are platform-specific (Setpgid+Kill on Unix,
+	// CREATE_NEW_PROCESS_GROUP+taskkill on Windows).
+	applyProcessGroup(cmd)
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
-			// Negative pid signals the process group.
-			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			return killProcessGroup(cmd.Process.Pid)
 		}
 		return nil
 	}
