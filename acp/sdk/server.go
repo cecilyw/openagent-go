@@ -809,22 +809,31 @@ func (s *promptSender) send(update SessionUpdate) {
 	_ = s.m.enqueue(notif)
 }
 
+// nowMeta stamps _meta.created_at with the current wall-clock (UTC
+// RFC3339). Every live-streamed message carries the time it was sent so
+// the frontend can render per-message timestamps in real time, not only
+// after a loadSession replay. Replay paths override this with the stored
+// CreatedAt via the WithMeta variants.
+func nowMeta() map[string]any {
+	return map[string]any{"created_at": time.Now().UTC().Format(time.RFC3339)}
+}
+
 func (s *promptSender) SendAgentMessage(text string) error {
-	su := SessionUpdate{SessionUpdate: "agent_message_chunk"}
+	su := SessionUpdate{SessionUpdate: "agent_message_chunk", Meta: nowMeta()}
 	su.SetContentBlock(ContentBlock{Type: "text", Text: text})
 	s.send(su)
 	return nil
 }
 
 func (s *promptSender) SendAgentThought(text string) error {
-	su := SessionUpdate{SessionUpdate: "agent_thought_chunk"}
+	su := SessionUpdate{SessionUpdate: "agent_thought_chunk", Meta: nowMeta()}
 	su.SetContentBlock(ContentBlock{Type: "text", Text: text})
 	s.send(su)
 	return nil
 }
 
 func (s *promptSender) SendToolCall(tc ToolCallUpdate) error {
-	return s.SendToolCallWithMeta(tc, nil)
+	return s.SendToolCallWithMeta(tc, nowMeta())
 }
 
 func (s *promptSender) SendToolCallWithMeta(tc ToolCallUpdate, meta map[string]any) error {
