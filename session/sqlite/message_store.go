@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite" // driver registration — this package opens "sqlite" DSNs itself
 
@@ -125,10 +126,18 @@ func (m *MessageStore) Append(ctx context.Context, sessionID string, msg openage
 	}
 	defer tx.Rollback()
 
+	// created_at: store RFC3339 UTC to match the sessions table format.
+	// A nil CreatedAt (legacy message never stamped, or test fixture)
+	// serializes as the empty string — scanMessages parses '' back to nil,
+	// which omitempty then keeps off the wire.
+	var createdAt string
+	if msg.CreatedAt != nil {
+		createdAt = msg.CreatedAt.UTC().Format(time.RFC3339)
+	}
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO messages (session_id, role, name, content, content_parts, tool_calls, tool_call_id, reasoning_content)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		sessionID, msg.Role, msg.Name, msg.Content, string(contentPartsJSON), string(toolCallsJSON), msg.ToolCallID, msg.ReasoningContent,
+		`INSERT INTO messages (session_id, role, name, content, content_parts, tool_calls, tool_call_id, reasoning_content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, msg.Role, msg.Name, msg.Content, string(contentPartsJSON), string(toolCallsJSON), msg.ToolCallID, msg.ReasoningContent, createdAt,
 	)
 	if err != nil {
 		return fmt.Errorf("sqlite append: %w", err)
@@ -162,7 +171,7 @@ func (m *MessageStore) Recent(ctx context.Context, sessionID string, n int, offs
 		fetchN = 20
 	}
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT id, role, name, content, content_parts, tool_calls, tool_call_id, reasoning_content
+		`SELECT id, role, name, content, content_parts, tool_calls, tool_call_id, reasoning_content, created_at
 		 FROM messages WHERE session_id = ?
 		 ORDER BY id DESC LIMIT ?`,
 		sessionID, fetchN,
@@ -213,7 +222,7 @@ func (m *MessageStore) RecentAfter(ctx context.Context, sessionID string, throug
 		return nil, nil
 	}
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT id, role, name, content, content_parts, tool_calls, tool_call_id, reasoning_content
+		`SELECT id, role, name, content, content_parts, tool_calls, tool_call_id, reasoning_content, created_at
 		 FROM messages WHERE session_id = ?
 		 ORDER BY id ASC LIMIT ? OFFSET ?`,
 		sessionID, n, throughIndex,
@@ -373,7 +382,8 @@ func (m *MessageStore) migrate() error {
 			content_parts    TEXT    NOT NULL DEFAULT '',
 			tool_calls       TEXT    NOT NULL DEFAULT '[]',
 			tool_call_id     TEXT    NOT NULL DEFAULT '',
-			reasoning_content TEXT   NOT NULL DEFAULT ''
+			reasoning_content TEXT   NOT NULL DEFAULT '',
+			created_at        TEXT    NOT NULL DEFAULT ''  -- RFC3339 UTC; '' = legacy row pre-column
 		);
 		CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
 
@@ -386,6 +396,26 @@ func (m *MessageStore) migrate() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("sqlite message store migrate: %w", err)
+	}
+
+	// created_at is a later addition. CREATE TABLE IF NOT EXISTS is a no-op
+	// on a pre-existing table, so databases created before this column need
+	// an explicit ALTER TABLE ADD COLUMN. SQLite fills existing rows with
+	// the DEFAULT ('' → zero time upstream → omitted on the wire). Probe
+	// via pragma_table_info so fresh databases (column already in CREATE
+	// TABLE) and already-migrated databases both skip the ALTER.
+	var hasCreatedAt int
+	if err := m.db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='created_at'`,
+	).Scan(&hasCreatedAt); err != nil {
+		return fmt.Errorf("sqlite message store migrate probe created_at: %w", err)
+	}
+	if hasCreatedAt == 0 {
+		if _, err := m.db.Exec(
+			`ALTER TABLE messages ADD COLUMN created_at TEXT NOT NULL DEFAULT ''`,
+		); err != nil {
+			return fmt.Errorf("sqlite message store migrate add created_at: %w", err)
+		}
 	}
 
 	// FTS5 index with the trigram tokenizer so search matches arbitrary
@@ -431,12 +461,20 @@ func scanMessages(rows *sql.Rows) ([]openagent.Message, error) {
 	var msgs []openagent.Message
 	for rows.Next() {
 		var id int64
-		var role, name, content, contentParts, toolCalls, toolCallID, reasoningContent string
-		if err := rows.Scan(&id, &role, &name, &content, &contentParts, &toolCalls, &toolCallID, &reasoningContent); err != nil {
+		var role, name, content, contentParts, toolCalls, toolCallID, reasoningContent, createdAt string
+		if err := rows.Scan(&id, &role, &name, &content, &contentParts, &toolCalls, &toolCallID, &reasoningContent, &createdAt); err != nil {
 			return nil, err
 		}
-		msgs = append(msgs, rowToMessage(role, name, content, contentParts, toolCalls, toolCallID, reasoningContent))
-		msgs[len(msgs)-1].Index = id
+		msg := rowToMessage(role, name, content, contentParts, toolCalls, toolCallID, reasoningContent)
+		msg.Index = id
+		// created_at is '' for legacy rows (pre-column or never stamped);
+		// leave nil so omitempty drops it on the wire.
+		if createdAt != "" {
+			if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
+				msg.CreatedAt = &t
+			}
+		}
+		msgs = append(msgs, msg)
 	}
 	return msgs, rows.Err()
 }

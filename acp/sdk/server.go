@@ -57,6 +57,15 @@ type SessionEventSender interface {
 	// or "agent_thought_chunk". messageID identifies the message for
 	// chunk grouping.
 	SendHistoryMessage(sessionUpdate, text, messageID string) error
+
+	// SendHistoryMessageWithMeta is SendHistoryMessage with a _meta payload.
+	// Used by loadSession replay to carry the stored CreatedAt timestamp so
+	// the frontend can render per-message times. meta may be nil.
+	SendHistoryMessageWithMeta(sessionUpdate, text, messageID string, meta map[string]any) error
+
+	// SendToolCallWithMeta is SendToolCall with a _meta payload, for the
+	// same loadSession-replay purpose on historical tool calls. meta may be nil.
+	SendToolCallWithMeta(tc ToolCallUpdate, meta map[string]any) error
 }
 
 // ── Server ──
@@ -815,6 +824,10 @@ func (s *promptSender) SendAgentThought(text string) error {
 }
 
 func (s *promptSender) SendToolCall(tc ToolCallUpdate) error {
+	return s.SendToolCallWithMeta(tc, nil)
+}
+
+func (s *promptSender) SendToolCallWithMeta(tc ToolCallUpdate, meta map[string]any) error {
 	su := "tool_call"
 	if tc.Status != "" && tc.Status != "pending" {
 		su = "tool_call_update"
@@ -834,6 +847,9 @@ func (s *promptSender) SendToolCall(tc ToolCallUpdate) error {
 		Locations:     tc.Locations,
 	}
 	u.SetToolCallContent(tc.Content)
+	if len(meta) > 0 {
+		u.Meta = meta
+	}
 	s.send(u)
 	return nil
 }
@@ -878,11 +894,18 @@ func (s *promptSender) SendSessionInfo(title string, metadata map[string]any) er
 }
 
 func (s *promptSender) SendHistoryMessage(sessionUpdate, text, messageID string) error {
+	return s.SendHistoryMessageWithMeta(sessionUpdate, text, messageID, nil)
+}
+
+func (s *promptSender) SendHistoryMessageWithMeta(sessionUpdate, text, messageID string, meta map[string]any) error {
 	su := SessionUpdate{SessionUpdate: sessionUpdate}
 	su.SetContentBlock(ContentBlock{Type: "text", Text: text})
 	if messageID != "" {
 		mid := MessageId(messageID)
 		su.MessageID = &mid
+	}
+	if len(meta) > 0 {
+		su.Meta = meta
 	}
 	s.send(su)
 	return nil

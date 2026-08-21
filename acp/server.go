@@ -1101,37 +1101,45 @@ func (s *AgentServer) replayHistory(ctx context.Context, sid openacp.SessionId, 
 	}
 	for i, msg := range msgs {
 		mid := fmt.Sprintf("hist_%d", i)
+		// Carry the stored wall-clock as _meta.created_at so the frontend
+		// can render per-message times from loadSession replay. nil for
+		// legacy rows (pre-column or never stamped) keeps _meta off the
+		// wire. Key matches the Go field / JSON tag / DB column end-to-end.
+		var meta map[string]any
+		if msg.CreatedAt != nil {
+			meta = map[string]any{"created_at": msg.CreatedAt.UTC().Format(time.RFC3339)}
+		}
 		switch msg.Role {
 		case openagent.RoleUser:
-			sender.SendHistoryMessage("user_message_chunk", msg.Content, mid)
+			sender.SendHistoryMessageWithMeta("user_message_chunk", msg.Content, mid, meta)
 
 		case openagent.RoleAssistant:
 			// Replay reasoning content before the message body.
 			if msg.ReasoningContent != "" {
-				sender.SendHistoryMessage("agent_thought_chunk", msg.ReasoningContent, mid)
+				sender.SendHistoryMessageWithMeta("agent_thought_chunk", msg.ReasoningContent, mid, meta)
 			}
 			if msg.Content != "" {
-				sender.SendHistoryMessage("agent_message_chunk", msg.Content, mid)
+				sender.SendHistoryMessageWithMeta("agent_message_chunk", msg.Content, mid, meta)
 			}
 			// Replay tool calls made by this assistant message.
 			// Status "pending" → sessionUpdate "tool_call" variant.
 			for _, tc := range msg.ToolCalls {
-				sender.SendToolCall(openacp.ToolCallUpdate{
+				sender.SendToolCallWithMeta(openacp.ToolCallUpdate{
 					ToolCallID: tc.ID,
 					Title:      opentool.ToolTitle(tc.Function.Name, tc.Function.Arguments),
 					Kind:       "execute",
 					Status:     "pending",
 					RawInput:   json.RawMessage(tc.Function.Arguments),
-				})
+				}, meta)
 			}
 
 		case openagent.RoleTool:
 			// Tool results — send as completed tool call updates.
-			sender.SendToolCall(openacp.ToolCallUpdate{
+			sender.SendToolCallWithMeta(openacp.ToolCallUpdate{
 				ToolCallID: msg.ToolCallID,
 				Status:     "completed",
 				RawOutput:  map[string]any{"result": msg.Content},
-			})
+			}, meta)
 
 		case openagent.RoleSystem:
 			// System messages are not rendered to clients; skip.

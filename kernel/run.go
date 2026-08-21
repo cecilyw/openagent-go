@@ -501,6 +501,15 @@ func (rt *Runtime) commit(ctx context.Context, session openagent.Session, msg op
 	if ctx.Err() != nil {
 		ctx = context.Background()
 	}
+	// Stamp wall-clock at commit time (UTC RFC3339 on the wire). Only set
+	// when unset so test fixtures and the cancel-compensation path (which
+	// builds its own messages) can supply their own. Uses a *time.Time so
+	// omitempty actually works: nil is omitted on the wire, whereas a zero
+	// value time.Time would serialize as 0001-01-01T00:00:00Z.
+	if msg.CreatedAt == nil {
+		now := time.Now().UTC()
+		msg.CreatedAt = &now
+	}
 	start := time.Now()
 	rt.observe(ctx, openagent.StageMemoryAppend, "enter", nil, time.Time{}, nil)
 	err := rt.deps.SessionStore.Append(ctx, session.ID, msg)

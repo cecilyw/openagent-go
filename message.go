@@ -1,5 +1,7 @@
 package openagent
 
+import "time"
+
 // Role represents the role of a message in a conversation.
 type Role string
 
@@ -24,6 +26,7 @@ type Message struct {
 	Result           *ToolResult   `json:"result,omitempty"` // structured tool outcome (RoleTool messages); Content stays the display text
 	Transient        bool          `json:"-"`                // internal-only routing (handoffs)
 	Index            int64         `json:"index,omitempty"`  // global insertion order (0 if backend doesn't track)
+	CreatedAt        *time.Time    `json:"created_at,omitempty"` // wall-clock when committed (UTC RFC3339); nil = legacy/never stamped (omitted on wire — a value time.Time zero would serialize as 0001-01-01)
 }
 
 // IsMultimodal returns true if this message carries multimodal content parts.

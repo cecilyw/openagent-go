@@ -144,6 +144,9 @@ func (s *recordingSender) SendToolCall(tc openacp.ToolCallUpdate) error {
 	s.record(recordedUpdate{kind: "tool_call", toolID: tc.ToolCallID, status: tc.Status})
 	return nil
 }
+func (s *recordingSender) SendToolCallWithMeta(tc openacp.ToolCallUpdate, meta map[string]any) error {
+	return s.SendToolCall(tc)
+}
 func (s *recordingSender) SendAvailableCommands(cmds []openacp.AvailableCommand) error { return nil }
 func (s *recordingSender) SendModeUpdate(modeID openacp.SessionModeId) error           { return nil }
 func (s *recordingSender) SendConfigOptionUpdate(opts []openacp.SessionConfigOption) error {
@@ -156,6 +159,9 @@ func (s *recordingSender) SendUsageUpdate(used, total int, cost *openacp.Cost) e
 func (s *recordingSender) SendSessionInfo(title string, metadata map[string]any) error { return nil }
 func (s *recordingSender) SendHistoryMessage(sessionUpdate, text, messageID string) error {
 	return nil
+}
+func (s *recordingSender) SendHistoryMessageWithMeta(sessionUpdate, text, messageID string, meta map[string]any) error {
+	return s.SendHistoryMessage(sessionUpdate, text, messageID)
 }
 
 // ── fake session.Store (in-memory) ──

@@ -56,6 +56,14 @@ func (rt *Runtime) cancelCompensation(ctx context.Context, session openagent.Ses
 				ToolCallID: tc.ID,
 				Content:    "cancelled by user",
 			}
+			// commit() stamps CreatedAt for normal appends; this path
+			// bypasses commit (it calls Append directly with a background
+			// ctx), so stamp here too — cancelled tool results deserve a
+			// wall-clock for history display just like committed ones.
+			if msg.CreatedAt == nil {
+				now := time.Now().UTC()
+				msg.CreatedAt = &now
+			}
 			start := time.Now()
 			rt.observe(context.Background(), openagent.StageMemoryAppend, "enter", nil, time.Time{}, nil)
 			err := rt.deps.SessionStore.Append(context.Background(), session.ID, msg)
