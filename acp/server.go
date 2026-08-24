@@ -1105,9 +1105,10 @@ func (s *AgentServer) replayHistory(ctx context.Context, sid openacp.SessionId, 
 		// can render per-message times from loadSession replay. nil for
 		// legacy rows (pre-column or never stamped) keeps _meta off the
 		// wire. Key matches the Go field / JSON tag / DB column end-to-end.
+		// RFC3339Nano mirrors nowMeta so live and replay share one precision.
 		var meta map[string]any
 		if msg.CreatedAt != nil {
-			meta = map[string]any{"created_at": msg.CreatedAt.UTC().Format(time.RFC3339)}
+			meta = map[string]any{"created_at": msg.CreatedAt.UTC().Format(time.RFC3339Nano)}
 		}
 		switch msg.Role {
 		case openagent.RoleUser:

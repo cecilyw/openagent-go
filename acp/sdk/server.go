@@ -810,12 +810,16 @@ func (s *promptSender) send(update SessionUpdate) {
 }
 
 // nowMeta stamps _meta.created_at with the current wall-clock (UTC
-// RFC3339). Every live-streamed message carries the time it was sent so
+// RFC3339Nano). Every live-streamed message carries the time it was sent so
 // the frontend can render per-message timestamps in real time, not only
 // after a loadSession replay. Replay paths override this with the stored
 // CreatedAt via the WithMeta variants.
+//
+// RFC3339Nano (not RFC3339) keeps sub-second precision so the frontend can
+// compute durations between adjacent events (e.g. thought start → end)
+// where the gap is often a few hundred milliseconds.
 func nowMeta() map[string]any {
-	return map[string]any{"created_at": time.Now().UTC().Format(time.RFC3339)}
+	return map[string]any{"created_at": time.Now().UTC().Format(time.RFC3339Nano)}
 }
 
 func (s *promptSender) SendAgentMessage(text string) error {
@@ -864,27 +868,27 @@ func (s *promptSender) SendToolCallWithMeta(tc ToolCallUpdate, meta map[string]a
 }
 
 func (s *promptSender) SendPlanUpdate(entries []PlanEntry) error {
-	s.send(SessionUpdate{SessionUpdate: "plan", Entries: entries})
+	s.send(SessionUpdate{SessionUpdate: "plan", Entries: entries, Meta: nowMeta()})
 	return nil
 }
 
 func (s *promptSender) SendAvailableCommands(cmds []AvailableCommand) error {
-	s.send(SessionUpdate{SessionUpdate: "available_commands_update", AvailableCommands: cmds})
+	s.send(SessionUpdate{SessionUpdate: "available_commands_update", AvailableCommands: cmds, Meta: nowMeta()})
 	return nil
 }
 
 func (s *promptSender) SendModeUpdate(modeID SessionModeId) error {
-	s.send(SessionUpdate{SessionUpdate: "current_mode_update", CurrentModeID: modeID})
+	s.send(SessionUpdate{SessionUpdate: "current_mode_update", CurrentModeID: modeID, Meta: nowMeta()})
 	return nil
 }
 
 func (s *promptSender) SendConfigOptionUpdate(opts []SessionConfigOption) error {
-	s.send(SessionUpdate{SessionUpdate: "config_option_update", ConfigOptions: opts})
+	s.send(SessionUpdate{SessionUpdate: "config_option_update", ConfigOptions: opts, Meta: nowMeta()})
 	return nil
 }
 
 func (s *promptSender) SendUsageUpdate(used, total int, cost *Cost) error {
-	s.send(SessionUpdate{SessionUpdate: "usage_update", Used: &used, Size: &total, Cost: cost})
+	s.send(SessionUpdate{SessionUpdate: "usage_update", Used: &used, Size: &total, Cost: cost, Meta: nowMeta()})
 	return nil
 }
 
@@ -893,10 +897,17 @@ func (s *promptSender) SendSessionInfo(title string, metadata map[string]any) er
 	if title != "" {
 		t = &title
 	}
+	// Merge nowMeta() with caller-supplied metadata. nowMeta provides
+	// created_at (consistent with every other live event); caller fields
+	// take precedence so business metadata is never clobbered by the stamp.
+	meta := nowMeta()
+	for k, v := range metadata {
+		meta[k] = v
+	}
 	su := SessionUpdate{
 		SessionUpdate: "session_info_update",
 		Title:         t,
-		Meta:          metadata,
+		Meta:          meta,
 	}
 	s.send(su)
 	return nil
