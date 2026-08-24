@@ -306,6 +306,11 @@ func NewToolClassifier() *ToolClassifier {
 		"read": true, "ls": true, "grep": true,
 		"webfetch": true, "websearch": true,
 		"recall": true, "load_skill": true, "reload_skills": true,
+		// Browser read-only tools: navigate/screenshot/evaluate/snapshot/tabs
+		// only read page state. click/type/press/close_* mutate the page or
+		// browser and stay Dangerous (require approval).
+		"browser_navigate": true, "browser_screenshot": true, "browser_evaluate": true,
+		"browser_use_snapshot": true, "browser_use_tabs": true,
 	}}
 }
 

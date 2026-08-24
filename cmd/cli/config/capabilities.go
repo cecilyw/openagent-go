@@ -12,6 +12,7 @@ type Capabilities struct {
 	Guard      *bool `json:"guard,omitempty"`      // default off
 	Approver   *bool `json:"approver,omitempty"`   // default off
 	Embedder   *bool `json:"embedder,omitempty"`   // default on — opens the knowledge store (CRUD + keyword recall); semantic vector recall requires embedding.* config
+	Browser    *bool `json:"browser,omitempty"`    // default on — headless Chrome automation (chromedp); Chrome-for-Testing is downloaded lazily on first browser tool call, never at startup
 }
 
 // on resolves a field against its default.
@@ -47,3 +48,11 @@ func (c Capabilities) OnGuard() bool { return c.on(c.Guard, false) }
 
 // OnApprover reports whether Approver is enabled.
 func (c Capabilities) OnApprover() bool { return c.on(c.Approver, false) }
+
+// OnBrowser reports whether the headless browser tools (browser_navigate,
+// browser_screenshot, browser_evaluate, browser_click, and the browser_use_*
+// family) are enabled. Default on: the tools are lazy — Chrome is only
+// spawned and Chrome-for-Testing only downloaded on the first browser tool
+// call, so enabling them costs nothing until the agent actually uses one.
+// Use --browser=off to disable (e.g. on a server where Chrome cannot run).
+func (c Capabilities) OnBrowser() bool { return c.on(c.Browser, true) }

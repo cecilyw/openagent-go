@@ -36,9 +36,13 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 
 	workDir, _ := os.Getwd()
 	sb, err := native.NewWithPolicy(workDir, sandboxPolicy(cfg.Sandbox))
+	restToolList := []string{"shell", "read", "write", "edit", "ls", "grep", "websearch", "webfetch"}
+	if caps.OnBrowser() {
+		restToolList = append(restToolList, "browser")
+	}
 	var tools []openagent.Tool
 	if err == nil {
-		tools = buildTools(sb, workDir, []string{"shell", "read", "write", "edit", "ls", "grep", "websearch", "webfetch"})
+		tools = buildTools(sb, workDir, restToolList)
 	} else {
 		slog.Warn("sandbox unavailable, tools disabled", "error", err)
 	}

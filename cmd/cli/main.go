@@ -323,6 +323,7 @@ func addCapabilityFlags(cmd *cobra.Command) {
 		{"guard", "off", "LLM content guard"},
 		{"approver", "off", "Human-in-the-Loop tool approval"},
 		{"embedder", "on", "Knowledge store (CRUD + keyword recall; vector recall needs embedding.* config)"},
+		{"browser", "on", "Headless browser automation (chromedp; downloads Chrome-for-Testing on first use)"},
 	} {
 		cmd.Flags().String(f.name, f.def, f.desc+` ("on" or "off")`)
 	}
@@ -352,6 +353,7 @@ func parseCapabilities(cmd *cobra.Command, caps *config.Capabilities) {
 	set("guard", &caps.Guard)
 	set("approver", &caps.Approver)
 	set("embedder", &caps.Embedder)
+	set("browser", &caps.Browser)
 }
 
 // ── run ──

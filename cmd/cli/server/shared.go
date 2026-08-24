@@ -208,6 +208,13 @@ func buildTools(sandbox *native.Sandbox, workDir string, toolList []string) []op
 	if enabled["webfetch"] {
 		tools = append(tools, opentool.NewWebFetch())
 	}
+	if enabled["browser"] {
+		// One-shot headless tools (browser_navigate/screenshot/evaluate/click)
+		// + persistent-session tools (browser_use_open/snapshot/click/type/
+		// press/play_media/tabs/switch_tab/close_tab/close).
+		tools = append(tools, opentool.NewBrowserTools()...)
+		tools = append(tools, opentool.NewBrowserUseTools()...)
+	}
 	return tools
 }
 
