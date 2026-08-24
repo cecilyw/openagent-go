@@ -141,10 +141,13 @@ const (
 // BuildAgentRuntime constructs a wasmhost.AgentRuntime backed by the given
 // Agent config and Session. The Get/Set closures directly read/write
 // Agent and Session fields. setModel is called by runtime_set_model_config
-// to replace a model in the global registry; it may be nil.
-func BuildAgentRuntime(rt *kernel.Runtime, session *openagent.Session, setModel func(provider, modelID, apiKey, baseURL string, maxInputTokens, maxOutputTokens int)) *wasmhost.AgentRuntime {
+// to replace a model in the global registry; setEmbedding is called by
+// runtime_set_embedding_config to refresh the embedder's credentials.
+// Both may be nil.
+func BuildAgentRuntime(rt *kernel.Runtime, session *openagent.Session, setModel func(provider, modelID, apiKey, baseURL string, maxInputTokens, maxOutputTokens int), setEmbedding func(baseURL, apiKey, model string)) *wasmhost.AgentRuntime {
 	return &wasmhost.AgentRuntime{
-		SetModel: setModel,
+		SetModel:     setModel,
+		SetEmbedding: setEmbedding,
 		Get: func(key string) (string, bool) {
 			switch key {
 			case wasmhost.RuntimeKeySessionID:

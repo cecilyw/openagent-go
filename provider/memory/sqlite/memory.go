@@ -55,6 +55,16 @@ func (m *Memory) WithEmbedder(e openagent.Embedder) *Memory {
 	return m
 }
 
+// UpdateEmbedder refreshes the baseURL, apiKey, and model of the configured
+// embedder in place. Used by runtime_set_embedding_config to refresh
+// credentials without restarting. No-op when no embedder is configured or
+// the embedder does not expose an Update method.
+func (m *Memory) UpdateEmbedder(baseURL, apiKey, model string) {
+	if u, ok := m.embedder.(interface{ Update(string, string, string) }); ok {
+		u.Update(baseURL, apiKey, model)
+	}
+}
+
 // Close releases the database connection.
 func (m *Memory) Close() error { return m.db.Close() }
 

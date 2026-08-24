@@ -474,6 +474,14 @@ func (h *HostAPI) RegisterHostModule(ctx context.Context, rt wazero.Runtime) err
 			return h.runtimeSet(ctx, mod, "max_turns", read(mod, valPtr, valLen))
 		}).
 		Export("runtime_set_max_turns").
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, mod api.Module, valPtr, valLen uint32) uint64 {
+			if h.denied("runtime_set_embedding_config") {
+				return writeJSON(ctx, mod, map[string]string{"error": "export runtime_set_embedding_config disabled"})
+			}
+			return h.runtimeSetEmbeddingConfig(ctx, mod, read(mod, valPtr, valLen))
+		}).
+		Export("runtime_set_embedding_config").
 		Instantiate(ctx)
 	return err
 }
@@ -539,6 +547,37 @@ func (h *HostAPI) runtimeSetModelConfig(ctx context.Context, mod api.Module, raw
 		return WriteString(ctx, mod, b)
 	}
 	rt.SetModel(mc.Provider, mc.ModelID, mc.APIKey, mc.BaseURL, mc.MaxInputTokens, mc.MaxOutputTokens)
+	b, _ := json.Marshal(map[string]string{})
+	return WriteString(ctx, mod, b)
+}
+
+// runtimeSetEmbeddingConfig parses a JSON embedding config and calls
+// rt.SetEmbedding to refresh the embedder's credentials in place.
+// Input: {"base_url":"https://...","api_key":"sk-...","model":"text-embedding-3-small"}
+func (h *HostAPI) runtimeSetEmbeddingConfig(ctx context.Context, mod api.Module, raw string) uint64 {
+	rt := AgentRuntimeFromContext(ctx)
+	if rt == nil {
+		b, _ := json.Marshal(map[string]string{"error": "runtime not available"})
+		return WriteString(ctx, mod, b)
+	}
+	if rt.SetEmbedding == nil {
+		b, _ := json.Marshal(map[string]string{"error": "SetEmbedding not configured"})
+		return WriteString(ctx, mod, b)
+	}
+	var ec struct {
+		BaseURL string `json:"base_url"`
+		APIKey  string `json:"api_key"`
+		Model   string `json:"model"`
+	}
+	if err := json.Unmarshal([]byte(raw), &ec); err != nil {
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
+		return WriteString(ctx, mod, b)
+	}
+	if ec.Model == "" {
+		b, _ := json.Marshal(map[string]string{"error": "model is required"})
+		return WriteString(ctx, mod, b)
+	}
+	rt.SetEmbedding(ec.BaseURL, ec.APIKey, ec.Model)
 	b, _ := json.Marshal(map[string]string{})
 	return WriteString(ctx, mod, b)
 }

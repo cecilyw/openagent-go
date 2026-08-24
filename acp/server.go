@@ -535,6 +535,16 @@ func (s *AgentServer) SetModel(provider, modelID, apiKey, baseURL string, maxInp
 	}
 }
 
+// SetEmbedding refreshes the embedder's baseURL, apiKey, and model in
+// place. Used by runtime_set_embedding_config. No-op when no memory
+// provider is configured or the provider does not expose UpdateEmbedder.
+func (s *AgentServer) SetEmbedding(baseURL, apiKey, model string) {
+	if u, ok := s.Deps.MemoryProvider.(interface{ UpdateEmbedder(string, string, string) }); ok {
+		u.UpdateEmbedder(baseURL, apiKey, model)
+		slog.Info("acp embedding config updated")
+	}
+}
+
 // modelIDs returns the registered model ids under modelsMu. SetModel
 // (wasm runtime_set_model_config) can insert concurrently from a tool
 // goroutine, so all iterations must go through this helper.
@@ -1596,7 +1606,7 @@ func (s *AgentServer) OnPrompt(ctx context.Context, req openacp.PromptRequest, s
 
 	// Inject AgentRuntime for runtime_* host exports.
 	if s.PluginMgr != nil {
-		rt := wasm.BuildAgentRuntime(agent, &oaSession, s.SetModel)
+		rt := wasm.BuildAgentRuntime(agent, &oaSession, s.SetModel, s.SetEmbedding)
 		ctx = wasmhost.WithAgentRuntime(ctx, rt)
 	}
 

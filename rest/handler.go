@@ -155,6 +155,16 @@ func (h *Handler) SetModel(provider, modelID, apiKey, baseURL string, maxInputTo
 	h.modelConfigs[key] = ModelConfig{Provider: provider, ModelID: modelID, APIKey: apiKey, BaseURL: baseURL}
 }
 
+// SetEmbedding refreshes the embedder's baseURL, apiKey, and model in
+// place. Used by runtime_set_embedding_config. No-op when no memory
+// provider is configured or the provider does not expose UpdateEmbedder.
+func (h *Handler) SetEmbedding(baseURL, apiKey, model string) {
+	if u, ok := h.deps.MemoryProvider.(interface{ UpdateEmbedder(string, string, string) }); ok {
+		u.UpdateEmbedder(baseURL, apiKey, model)
+		slog.Info("rest embedding config updated")
+	}
+}
+
 // ModelConfig stores the original apiKey/baseURL for a registered model,
 // used by SetModel to preserve values when only model_id changes.
 type ModelConfig struct {
@@ -448,7 +458,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		// Inject AgentRuntime into context so runtime_* host exports work
 		// in agent:observers / agent:tools plugins during this run.
 		if h.pluginMgr != nil {
-			wrt := wasm.BuildAgentRuntime(rt, &oaSession, h.SetModel)
+			wrt := wasm.BuildAgentRuntime(rt, &oaSession, h.SetModel, h.SetEmbedding)
 			ctx = wasmhost.WithAgentRuntime(ctx, wrt)
 		}
 
