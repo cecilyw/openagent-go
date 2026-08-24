@@ -324,6 +324,7 @@ func addCapabilityFlags(cmd *cobra.Command) {
 		{"approver", "off", "Human-in-the-Loop tool approval"},
 		{"embedder", "on", "Knowledge store (CRUD + keyword recall; vector recall needs embedding.* config)"},
 		{"browser", "on", "Headless browser automation (chromedp; downloads Chrome-for-Testing on first use)"},
+		{"office", "on", "PPT tools: read/analyze/fill (pure Go) + write (needs Node.js)"},
 	} {
 		cmd.Flags().String(f.name, f.def, f.desc+` ("on" or "off")`)
 	}
@@ -354,6 +355,7 @@ func parseCapabilities(cmd *cobra.Command, caps *config.Capabilities) {
 	set("approver", &caps.Approver)
 	set("embedder", &caps.Embedder)
 	set("browser", &caps.Browser)
+	set("office", &caps.Office)
 }
 
 // ── run ──

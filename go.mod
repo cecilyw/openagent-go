@@ -28,8 +28,10 @@ require (
 require github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 
 require (
+	github.com/casibase/goppt v1.0.0
 	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f
 	github.com/chromedp/chromedp v0.16.0
+	github.com/the-open-agent/office-tool-use v0.2.1
 	mvdan.cc/sh/v3 v3.13.1
 )
 
@@ -39,6 +41,7 @@ require (
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
+	golang.org/x/image v0.36.0 // indirect
 )
 
 require (

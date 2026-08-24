@@ -215,6 +215,11 @@ func buildTools(sandbox *native.Sandbox, workDir string, toolList []string) []op
 		tools = append(tools, opentool.NewBrowserTools()...)
 		tools = append(tools, opentool.NewBrowserUseTools()...)
 	}
+	if enabled["office"] {
+		// PPT tools: pptx_read (pure Go) + pptx_template_analyze/fill (pure
+		// Go) + pptx_write (Node.js PptxGenJS, embedded worker bundle).
+		tools = append(tools, opentool.NewOfficeTools(workDir)...)
+	}
 	return tools
 }
 

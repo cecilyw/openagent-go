@@ -40,6 +40,9 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 	if caps.OnBrowser() {
 		restToolList = append(restToolList, "browser")
 	}
+	if caps.OnOffice() {
+		restToolList = append(restToolList, "office")
+	}
 	var tools []openagent.Tool
 	if err == nil {
 		tools = buildTools(sb, workDir, restToolList)

@@ -13,6 +13,7 @@ type Capabilities struct {
 	Approver   *bool `json:"approver,omitempty"`   // default off
 	Embedder   *bool `json:"embedder,omitempty"`   // default on — opens the knowledge store (CRUD + keyword recall); semantic vector recall requires embedding.* config
 	Browser    *bool `json:"browser,omitempty"`    // default on — headless Chrome automation (chromedp); Chrome-for-Testing is downloaded lazily on first browser tool call, never at startup
+	Office     *bool `json:"office,omitempty"`     // default on — PPT read/template tools (pure Go); pptx_write needs Node.js (returns a clear error if missing)
 }
 
 // on resolves a field against its default.
@@ -56,3 +57,10 @@ func (c Capabilities) OnApprover() bool { return c.on(c.Approver, false) }
 // call, so enabling them costs nothing until the agent actually uses one.
 // Use --browser=off to disable (e.g. on a server where Chrome cannot run).
 func (c Capabilities) OnBrowser() bool { return c.on(c.Browser, true) }
+
+// OnOffice reports whether the PPT/Office tools (pptx_read,
+// pptx_template_analyze, pptx_template_fill, pptx_write) are enabled.
+// Default on: pptx_read and the template tools are pure Go with no external
+// runtime; pptx_write needs Node.js but returns a clear error if missing
+// (the model can install Node via shell). Use --office=off to disable.
+func (c Capabilities) OnOffice() bool { return c.on(c.Office, true) }

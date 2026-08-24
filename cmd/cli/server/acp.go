@@ -162,6 +162,9 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 	if caps.OnBrowser() {
 		baseToolList = append(baseToolList, "browser")
 	}
+	if caps.OnOffice() {
+		baseToolList = append(baseToolList, "office")
+	}
 	srv.ToolFactory = func(cwd string) []openagent.Tool {
 		sb, err := native.NewWithPolicy(cwd, policy)
 		if err != nil {
