@@ -250,8 +250,11 @@ type WebFetch struct {
 	client *http.Client // injectable for tests; defaults to utils.SharedClient()
 }
 
-// NewWebFetch creates a WebFetch tool with the shared SSRF-safe HTTP client.
-func NewWebFetch() *WebFetch { return &WebFetch{client: utils.SharedClient()} }
+// NewWebFetch creates a WebFetch tool with the utls HTTP client, which
+// mimics Chrome's TLS ClientHello to pass WAFs that fingerprint at the TLS
+// layer (e.g. Tencent EdgeOne). SSRF protection is identical to SharedClient
+// — the utls dial runs ResolveAndCheck at dial time. See utils/webutls.go.
+func NewWebFetch() *WebFetch { return &WebFetch{client: utils.SharedClientUTLS()} }
 
 // withClient returns a WebFetch that uses the given client. Untested callers
 // must not use this — it exists so tests can point at an httptest server
