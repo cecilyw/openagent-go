@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	openagent "github.com/yusheng-g/openagent-go"
 )
 
 func TestPptxWriteSmoke(t *testing.T) {
@@ -28,8 +30,18 @@ export default async function build(pptx, ctx) {
 	})
 
 	tools := NewOfficeTools(t.TempDir())
-	// tools[1] is pptxWriteTool (see NewOfficeTools order).
-	result := tools[1].Execute(context.Background(), args)
+	// Find pptx_write by name (index is fragile as tools are added).
+	var writeTool openagent.Tool
+	for _, t2 := range tools {
+		if t2.Definition().Name == "pptx_write" {
+			writeTool = t2
+			break
+		}
+	}
+	if writeTool == nil {
+		t.Fatal("pptx_write tool not found in NewOfficeTools")
+	}
+	result := writeTool.Execute(context.Background(), args)
 	if result.Error != nil {
 		t.Fatalf("pptx_write failed: %s", result.Error.Message)
 	}
@@ -56,7 +68,17 @@ func TestPptxWriteMissingNode(t *testing.T) {
 		"script": "export default async function build(pptx, ctx) {}",
 	})
 	tools := NewOfficeTools(t.TempDir())
-	result := tools[1].Execute(context.Background(), args)
+	var writeTool openagent.Tool
+	for _, t2 := range tools {
+		if t2.Definition().Name == "pptx_write" {
+			writeTool = t2
+			break
+		}
+	}
+	if writeTool == nil {
+		t.Fatal("pptx_write tool not found")
+	}
+	result := writeTool.Execute(context.Background(), args)
 	if result.Error == nil {
 		t.Fatal("expected error when node is missing")
 	}

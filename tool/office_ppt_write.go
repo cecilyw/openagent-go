@@ -38,9 +38,10 @@ type pptxWriteParams struct {
 func (t *pptxWriteTool) Definition() openagent.FunctionDefinition {
 	return openagent.FunctionDefinition{
 		Name: "pptx_write",
-		Description: "Create a PowerPoint (.pptx) file by running a PptxGenJS build script in Node.js. " +
+		Description: "Create a PowerPoint (.pptx) file from scratch by running a PptxGenJS build script in Node.js. " +
 			"The script exports default async function build(pptx, ctx) and adds slides to the provided PptxGenJS instance. " +
-			"Requires Node.js (install via shell if missing). For template-based generation, prefer pptx_template_fill (no Node needed).",
+			"Requires Node.js (install via shell if missing). " +
+			"Use this when creating a deck with no template; when a template is available, prefer pptx_template_fill (no Node needed, preserves design).",
 		Parameters: openagent.SchemaOf[pptxWriteParams](),
 	}
 }

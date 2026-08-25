@@ -41,10 +41,14 @@ func officeToolError(toolName, text string) *openagent.ToolResult {
 	return openagent.ErrorResult(fmt.Errorf("%s: %s", toolName, text), false, "")
 }
 
-// NewOfficeTools returns the four office/PPT tools. workDir is the workspace
-// root used by pptx_read for relative-path resolution.
+// NewOfficeTools returns the office tools (Word + Excel + PPT). workDir is
+// the workspace root used by read tools for relative-path resolution.
 func NewOfficeTools(workDir string) []openagent.Tool {
 	return []openagent.Tool{
+		&wordReadTool{workDir: workDir},
+		&wordWriteTool{},
+		&excelReadTool{workDir: workDir},
+		&excelWriteTool{},
 		&pptxReadTool{workDir: workDir},
 		&pptxWriteTool{},
 		&pptxTemplateAnalyzeTool{},

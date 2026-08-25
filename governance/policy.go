@@ -311,9 +311,9 @@ func NewToolClassifier() *ToolClassifier {
 		// browser and stay Dangerous (require approval).
 		"browser_navigate": true, "browser_screenshot": true, "browser_evaluate": true,
 		"browser_use_snapshot": true, "browser_use_tabs": true,
-		// Office read-only tools: pptx_read only reads. write/template_fill
-		// create files and stay Dangerous (require approval).
-		"pptx_read": true,
+		// Office read-only tools: word_read/excel_read/pptx_read only read.
+		// write/template_fill create files and stay Dangerous (require approval).
+		"word_read": true, "excel_read": true, "pptx_read": true,
 	}}
 }
 

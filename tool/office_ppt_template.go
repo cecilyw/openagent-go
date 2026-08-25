@@ -89,7 +89,8 @@ func (t *pptxTemplateFillTool) Definition() openagent.FunctionDefinition {
 		Description: "Create a new PowerPoint file by filling and reusing slides from an existing template. " +
 			"Call pptx_template_analyze first and use its exact slide, slot, table, chart, image, and SmartArt IDs in the plan. " +
 			"Supports text replacements, table/chart/image/SmartArt edits, slide reordering/repetition, and notes. " +
-			"The output contains exactly the slides in plan order.",
+			"The output contains exactly the slides in plan order. " +
+			"Prefer this over pptx_write when a template is available — it needs no Node.js and preserves the template's design/layout.",
 		Parameters: openagent.SchemaOf[pptxTemplateFillParams](),
 	}
 }
