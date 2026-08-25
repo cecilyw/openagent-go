@@ -70,6 +70,7 @@ export default async function build(pptx, ctx) {
 
 ## Design Rules
 
+- **Set slide background explicitly on every slide.** PptxGenJS defaults to a black background; if you do not set `slide.background = { color: "FFFFFF" }`, slides will render with a black background. Always set the background color even for "white" slides.
 - Avoid plain white bullet decks. Every slide should have a visual element: shape, image, chart, icon, timeline, stat callout, or diagram.
 - Vary layouts across the deck: title, divider, two-column, card grid, process flow, quote/callout, and conclusion.
 - Pick topic-specific colors. Use one dominant color, one or two supporting tones, and one accent.

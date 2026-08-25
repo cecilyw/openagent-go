@@ -22,6 +22,8 @@ func ToolTitle(name string, args string) string {
 		Query       string `json:"query"`
 		Goal        string `json:"goal"`
 		URL         string `json:"url"`
+		Name        string `json:"name"`
+		Template    string `json:"template"`
 	}
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
 		return name
@@ -84,6 +86,34 @@ func ToolTitle(name string, args string) string {
 	case "webfetch":
 		if params.URL != "" {
 			return name + " " + StripURLQuery(params.URL)
+		}
+	case "load_skill":
+		if params.Name != "" {
+			return name + " " + params.Name
+		}
+	case "browser_navigate", "browser_screenshot", "browser_evaluate", "browser_click":
+		if params.URL != "" {
+			return name + " " + StripURLQuery(params.URL)
+		}
+	case "browser_use_open":
+		if params.URL != "" {
+			return name + " " + StripURLQuery(params.URL)
+		}
+	case "pptx_read", "word_read", "excel_read":
+		if params.Path != "" {
+			return name + " " + filepath.Base(params.Path)
+		}
+	case "pptx_write", "word_write", "excel_write":
+		if params.Path != "" {
+			return name + " " + params.Path
+		}
+	case "pptx_template_analyze":
+		if params.Template != "" {
+			return name + " " + filepath.Base(params.Template)
+		}
+	case "pptx_template_fill":
+		if params.Path != "" {
+			return name + " " + params.Path
 		}
 	}
 	return name
