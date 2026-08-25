@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
-# build.sh — convenience build for openagent-go's two binaries.
+# build.sh — convenience build for the openagent-go binary.
 #
-# Produces <name> (Go CLI/server) and <name>-tui (Rust TUI client). The Go
-# binary is built with -tags embed (built-in skills bundled) and -s -w
-# (stripped, smaller binary). The Go binary's identity is set via ldflags
-# (version.Name); the Rust TUI bakes <name> in as its *default* spawn target
-# via OPENAGENT_BINARY_NAME, then launches `<name> serve --acp` unless
-# --backend overrides it.
+# Produces <name> (Go CLI/server with the interactive TUI built in as the
+# `tui` subcommand). Built with -tags embed (built-in skills bundled) and
+# -s -w (stripped, smaller binary). The binary's identity is set via
+# ldflags (version.Name / version.Version).
 #
-# The two binaries do NOT have to be built together: the TUI accepts
-# `--backend "<command>"` at runtime, so a default `openagent-tui` can
-# target any ACP backend without a rebuild. This script just produces a
-# matched pair with the right defaults baked in, which is convenient for
-# releases and branded installs.
+# The TUI is pure Go (bubbletea), no longer a separate Rust binary — run
+# `./<name> tui` to launch it.
 #
 # Usage:
 #   ./build.sh                         # name=openagent (default)
 #   OPENAGENT_BINARY_NAME=myagent ./build.sh
 #
-# Requires: Go (any recent) + Rust ≥ 1.88 (rustup) for the TUI.
+# Requires: Go (any recent). No Rust toolchain needed for the TUI; Rust is
+# only used for the optional WASM plugin PDK (see examples/plugin/).
 set -euo pipefail
 
 NAME="${OPENAGENT_BINARY_NAME:-openagent}"
@@ -36,16 +32,8 @@ go build -tags embed \
                    -X github.com/yusheng-g/openagent-go/version.Version=$VERSION" \
          -o "$NAME" ./cmd/cli/
 
-echo "==> Building Rust TUI binary: $NAME-tui"
-OPENAGENT_BINARY_NAME="$NAME" cargo build --release --manifest-path tui/Cargo.toml
-
-# cargo produces a binary named after the crate (openagent-tui); rename to
-# match the build identity so the pair is <name> + <name>-tui.
-cp -f "tui/target/release/openagent-tui" "$NAME-tui"
-
 echo ""
 echo "Built:"
-echo "  $NAME        (Go: serve/run/keyring)"
-echo "  $NAME-tui    (Rust: spawns '$NAME serve --acp' by default; --backend overrides)"
+echo "  $NAME    (serve/run/keyring + tui subcommand)"
 echo ""
-echo "Put both on PATH, then run: $NAME-tui"
+echo "Run:  $NAME tui"
