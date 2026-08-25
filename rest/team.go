@@ -323,7 +323,7 @@ func (h *TeamHandler) handleChat(w http.ResponseWriter, r *http.Request) {
 			// the subscriber see an error event instead (mirrors
 			// handler.go's run goroutine).
 			if rec := recover(); rec != nil {
-				slog.Error("openagent: team run panicked", "session", id, "panic", rec)
+				slog.Error("team run panicked", "session", id, "panic", rec)
 				h.sm.Bus().Publish(id, SSEEvent{Type: "error", Error: "agent run panicked"})
 			}
 			s.mu.Lock()

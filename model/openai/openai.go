@@ -258,7 +258,7 @@ func toSDKContentParts(parts []openagent.ContentPart) []openaisdk.ChatCompletion
 		default:
 			// An unknown part type would serialize as an empty {} and be
 			// silently dropped by the API — drop it explicitly instead.
-			slog.Warn("openagent: unsupported content part type, dropping", "type", p.Type)
+			slog.Warn("unsupported content part type, dropping", "type", p.Type)
 		}
 	}
 	return out

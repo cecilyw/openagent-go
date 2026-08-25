@@ -126,7 +126,7 @@ func (m *Manager) Discover(ctx context.Context) error {
 		if err := m.loadOne(ctx, path); err != nil {
 			// One broken plugin must not disable the rest: skip it and
 			// keep discovering.
-			slog.Error("openagent: wasm plugin load failed, skipping", "plugin", entry.Name(), "error", err)
+			slog.Error("wasm plugin load failed, skipping", "plugin", entry.Name(), "error", err)
 		}
 	}
 
@@ -179,11 +179,11 @@ func (m *Manager) registerSchedules(meta PluginMeta, mod *module) {
 	seen := make(map[string]bool, len(meta.Schedules))
 	for _, sc := range meta.Schedules {
 		if sc.ID == "" || sc.Cron == "" {
-			slog.Warn("openagent: wasm plugin declared an invalid schedule", "plugin", meta.Name, "schedule", sc)
+			slog.Warn("wasm plugin declared an invalid schedule", "plugin", meta.Name, "schedule", sc)
 			continue
 		}
 		if seen[sc.ID] {
-			slog.Warn("openagent: wasm plugin declared duplicate schedule id", "plugin", meta.Name, "id", sc.ID)
+			slog.Warn("wasm plugin declared duplicate schedule id", "plugin", meta.Name, "id", sc.ID)
 			continue
 		}
 		seen[sc.ID] = true
@@ -191,10 +191,10 @@ func (m *Manager) registerSchedules(meta PluginMeta, mod *module) {
 		if err := m.scheduler.Register(id, sc.Cron, func(ctx context.Context, at time.Time) {
 			m.invokeScheduled(ctx, mod, sc.ID, at)
 		}); err != nil {
-			slog.Warn("openagent: wasm plugin schedule rejected", "plugin", meta.Name, "id", sc.ID, "cron", sc.Cron, "error", err)
+			slog.Warn("wasm plugin schedule rejected", "plugin", meta.Name, "id", sc.ID, "cron", sc.Cron, "error", err)
 			continue
 		}
-		slog.Info("openagent: registered wasm scheduled job", "plugin", meta.Name, "job", sc.ID, "cron", sc.Cron)
+		slog.Info("registered wasm scheduled job", "plugin", meta.Name, "job", sc.ID, "cron", sc.Cron)
 		// m.mu is already held by Discover — appending without re-locking.
 		m.scheduled[meta.Name] = append(m.scheduled[meta.Name], id)
 	}
@@ -209,12 +209,12 @@ func (m *Manager) invokeScheduled(ctx context.Context, mod *module, jobID string
 		"scheduled_at": at.Format(time.RFC3339),
 	})
 	if err != nil {
-		slog.Error("openagent: wasm scheduled job marshal failed", "job", jobID, "error", err)
+		slog.Error("wasm scheduled job marshal failed", "job", jobID, "error", err)
 		return
 	}
 	out, err := mod.invoke(ctx, "run_scheduled", payload)
 	if err != nil {
-		slog.Error("openagent: wasm scheduled job failed", "job", jobID, "error", err)
+		slog.Error("wasm scheduled job failed", "job", jobID, "error", err)
 		return
 	}
 	// The result is structured (ScheduledJobResult) — the error string
@@ -225,15 +225,15 @@ func (m *Manager) invokeScheduled(ctx context.Context, mod *module, jobID string
 		Error  string `json:"error"`
 	}
 	if err := json.Unmarshal(out, &r); err != nil {
-		slog.Error("openagent: wasm scheduled job returned unparseable result", "job", jobID, "raw", string(out), "error", err)
+		slog.Error("wasm scheduled job returned unparseable result", "job", jobID, "raw", string(out), "error", err)
 		return
 	}
 	if r.Error != "" {
-		slog.Error("openagent: wasm scheduled job failed", "job", jobID, "error", r.Error)
+		slog.Error("wasm scheduled job failed", "job", jobID, "error", r.Error)
 		return
 	}
 	if r.Result != "" {
-		slog.Info("openagent: wasm scheduled job ran", "job", jobID, "result", r.Result)
+		slog.Info("wasm scheduled job ran", "job", jobID, "result", r.Result)
 	}
 }
 
@@ -327,7 +327,7 @@ func (m *Manager) dispatchStage(event openagent.StageEvent) {
 	select {
 	case ch <- event:
 	default:
-		slog.Warn("openagent: wasm observer queue full, dropping stage event", "stage", event.Name, "phase", event.Phase)
+		slog.Warn("wasm observer queue full, dropping stage event", "stage", event.Name, "phase", event.Phase)
 	}
 }
 
@@ -345,7 +345,7 @@ func (m *Manager) dispatchDecision(event openagent.DecisionEvent) {
 	select {
 	case ch <- event:
 	default:
-		slog.Warn("openagent: wasm observer queue full, dropping decision event", "layer", event.Layer, "outcome", event.Outcome)
+		slog.Warn("wasm observer queue full, dropping decision event", "layer", event.Layer, "outcome", event.Outcome)
 	}
 }
 
@@ -397,7 +397,7 @@ func (m *Manager) observeLoop() {
 func (m *Manager) runObservers(event openagent.StageEvent) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			slog.Error("openagent: wasm observer panicked", "panic", rec)
+			slog.Error("wasm observer panicked", "panic", rec)
 		}
 	}()
 	m.mu.Lock()
@@ -435,7 +435,7 @@ func (m *Manager) runObservers(event openagent.StageEvent) {
 func (m *Manager) runDecisionObservers(event openagent.DecisionEvent) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			slog.Error("openagent: wasm decision observer panicked", "panic", rec)
+			slog.Error("wasm decision observer panicked", "panic", rec)
 		}
 	}()
 	m.mu.Lock()

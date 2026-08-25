@@ -18,6 +18,7 @@ import (
 
 	openagent "github.com/yusheng-g/openagent-go"
 	"github.com/yusheng-g/openagent-go/utils"
+	"github.com/yusheng-g/openagent-go/version"
 )
 
 // Persistent browser-use session tools.
@@ -279,7 +280,7 @@ func (s *browserUseSession) switchToNewTargetLocked(before map[target.ID]bool, p
 // Cookies and localStorage survive here across sessions.
 func defaultBrowserUseDataDir() string {
 	if configDir, err := os.UserConfigDir(); err == nil && configDir != "" {
-		return filepath.Join(configDir, "openagent", "browser-use")
+		return filepath.Join(configDir, version.Name, "browser-use")
 	}
 	return filepath.Join(os.TempDir(), "openagent-browser-use")
 }

@@ -99,7 +99,7 @@ func (e *LLMExtractor) Extract(ctx context.Context, scope ContextScope, messages
 	if e == nil || model == nil || e.Provider == nil || len(messages) == 0 {
 		return
 	}
-	slog.Debug("openagent: knowledge extraction triggered", "user", scope.UserID, "messages", len(messages))
+	slog.Debug("knowledge extraction triggered", "user", scope.UserID, "messages", len(messages))
 	max := e.MaxItems
 	if max <= 0 {
 		max = maxKnowledgeItems
@@ -136,7 +136,7 @@ func (e *LLMExtractor) Extract(ctx context.Context, scope ContextScope, messages
 		MaxTokens: 2048,
 	})
 	if err != nil || resp == nil || len(resp.Choices) == 0 {
-		slog.Warn("openagent: knowledge extract failed", "error", err)
+		slog.Warn("knowledge extract failed", "error", err)
 		return
 	}
 
@@ -148,7 +148,7 @@ func (e *LLMExtractor) Extract(ctx context.Context, scope ContextScope, messages
 	// truncation or filter that may have suppressed content.
 	if strings.TrimSpace(raw) == "" {
 		if fr := choice.FinishReason; fr == "length" || fr == "content_filter" {
-			slog.Warn("openagent: knowledge extract empty response",
+			slog.Warn("knowledge extract empty response",
 				"finish_reason", fr)
 		}
 		return
@@ -159,7 +159,7 @@ func (e *LLMExtractor) Extract(ctx context.Context, scope ContextScope, messages
 		if len(raw) > 300 {
 			raw = raw[:300]
 		}
-		slog.Warn("openagent: knowledge extract parse failed", "error", err, "raw", raw)
+		slog.Warn("knowledge extract parse failed", "error", err, "raw", raw)
 		return
 	}
 
@@ -187,12 +187,12 @@ func (e *LLMExtractor) Extract(ctx context.Context, scope ContextScope, messages
 			// A failed store is invisible to the run (extraction is
 			// fire-and-forget) — log it or the user silently loses the
 			// extracted knowledge.
-			slog.Warn("openagent: knowledge store failed", "error", err)
+			slog.Warn("knowledge store failed", "error", err)
 			continue
 		}
 		stored++
 	}
-	slog.Debug("openagent: knowledge extraction done", "user", scope.UserID, "stored", stored, "candidates", len(items))
+	slog.Debug("knowledge extraction done", "user", scope.UserID, "stored", stored, "candidates", len(items))
 }
 
 // buildTranscript renders messages as a compact transcript (role: content).

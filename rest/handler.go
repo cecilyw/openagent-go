@@ -367,7 +367,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reset pending approval for the new chat message.
 	if s.pendingApproval != nil {
-		slog.Info("openagent: discarding pending approval for new chat", "session", id)
+		slog.Info("discarding pending approval for new chat", "session", id)
 	}
 	s.running = true
 	s.pendingApproval = nil
@@ -403,7 +403,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	// When provider is empty, find the first registered model for the given ID.
 	model := h.lookupModel(provider, modelID)
 	if model == nil {
-		slog.Warn("openagent: unknown model, falling back to default", "session", id, "provider", provider, "model_id", modelID)
+		slog.Warn("unknown model, falling back to default", "session", id, "provider", provider, "model_id", modelID)
 		model = h.defaultModel
 	}
 
@@ -426,7 +426,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 			// A panic in the run must not kill the server: log it and let
 			// the subscriber see an error event instead.
 			if rec := recover(); rec != nil {
-				slog.Error("openagent: agent run panicked", "session", id, "panic", rec)
+				slog.Error("agent run panicked", "session", id, "panic", rec)
 				h.sm.Bus().Publish(id, SSEEvent{Type: "error", Error: "agent run panicked"})
 			}
 			s.mu.Lock()
@@ -623,7 +623,7 @@ func (a *restApprover) Ask(ctx context.Context, call openagent.ToolCall, def ope
 			}
 			for _, key := range keys {
 				if err := a.memory.Remember(ctx, session.ID, key, d); err != nil {
-					slog.Warn("openagent: approval always persistence failed", "session", session.ID, "error", err)
+					slog.Warn("approval always persistence failed", "session", session.ID, "error", err)
 				}
 			}
 		}
@@ -637,7 +637,7 @@ func (a *restApprover) Ask(ctx context.Context, call openagent.ToolCall, def ope
 	default:
 		// Unrecognized action (malformed request, future protocol value):
 		// fail closed — an approval UI hiccup must never auto-execute.
-		slog.Warn("openagent: approval received unknown action, denying", "action", r.action)
+		slog.Warn("approval received unknown action, denying", "action", r.action)
 		return governance.Decision{Action: governance.Deny, Reason: "unknown action: " + r.action}, nil
 	}
 }

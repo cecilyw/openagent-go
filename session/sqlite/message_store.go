@@ -253,7 +253,7 @@ func (m *MessageStore) Compact(ctx context.Context, sessionID string, throughInd
 	if err != nil {
 		// Corrupt/unreadable history: fall back to compressing from the
 		// start rather than silently skipping the marker.
-		slog.Warn("openagent: previous compression marker unreadable", "session", sessionID, "error", err)
+		slog.Warn("previous compression marker unreadable", "session", sessionID, "error", err)
 	}
 	lastIdx := 0
 	if prev != nil {

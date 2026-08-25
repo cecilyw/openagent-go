@@ -132,7 +132,7 @@ func (s *Scheduler) tick(now time.Time) {
 		}
 		j.NextRun = j.sched.Next(now)
 		if j.Running {
-			slog.Warn("openagent: scheduled job skipped (previous run still active)", "job", j.ID)
+			slog.Warn("scheduled job skipped (previous run still active)", "job", j.ID)
 			continue
 		}
 		j.Running = true
@@ -146,7 +146,7 @@ func (s *Scheduler) tick(now time.Time) {
 func (s *Scheduler) fire(j *Job, at time.Time) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			slog.Error("openagent: scheduled job panicked", "job", j.ID, "panic", rec)
+			slog.Error("scheduled job panicked", "job", j.ID, "panic", rec)
 		}
 		s.mu.Lock()
 		j.Running = false

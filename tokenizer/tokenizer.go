@@ -56,7 +56,7 @@ func ForModel(modelID string) *tiktoken.Tiktoken {
 			tke, err = tiktoken.GetEncoding(tiktoken.MODEL_O200K_BASE)
 			modelID = "o200k_base"
 			if err != nil {
-				slog.Warn("openagent: tokenizer unavailable", "error", err)
+				slog.Warn("tokenizer unavailable", "error", err)
 				cache[key] = nil
 				return nil
 			}
@@ -101,7 +101,7 @@ func Count(modelID, text string) (n int) {
 	// unrelated panics from other code.
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Warn("openagent: tiktoken encode panicked, using heuristic", "model", modelID, "panic", r)
+			slog.Warn("tiktoken encode panicked, using heuristic", "model", modelID, "panic", r)
 			n = heuristicCount(text)
 		}
 	}()

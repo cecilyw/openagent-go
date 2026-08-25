@@ -84,7 +84,7 @@ func (sm *sessionManager[E]) Checkpoint(ctx context.Context, id string) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := sm.runtime.Checkpoint(ctx, id); err != nil {
-		slog.Warn("openagent: session checkpoint failed", "session", id, "error", err)
+		slog.Warn("session checkpoint failed", "session", id, "error", err)
 	}
 }
 

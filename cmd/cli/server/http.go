@@ -16,6 +16,7 @@ import (
 	"github.com/yusheng-g/openagent-go/sandbox/native"
 	"github.com/yusheng-g/openagent-go/summarizer"
 	opentool "github.com/yusheng-g/openagent-go/tool"
+	"github.com/yusheng-g/openagent-go/version"
 
 	wasm "github.com/yusheng-g/openagent-go/plugin/agent/wasm"
 	cliwasm "github.com/yusheng-g/openagent-go/plugin/cli/wasm"
@@ -69,9 +70,15 @@ func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) 
 		agent.WithMaxTurns(100),
 	}
 	opts, skillProvider := buildOpts(opts, caps, m)
-	agentCfg := agent.New("openagent", opts...)
+	agentCfg := agent.New(version.Name, opts...)
 
-	deps := buildRuntimeDeps(caps, cfg.Sensitive)
+	tracer, telemetryShutdown, err := setupTelemetry(ctx, *cfg)
+	if err != nil {
+		return fmt.Errorf("telemetry init: %w", err)
+	}
+	defer telemetryShutdown()
+
+	deps := buildRuntimeDeps(caps, cfg.Sensitive, tracer)
 	deps.Tools = tools
 	deps.SkillProvider = skillProvider
 	if caps.OnMemory() {

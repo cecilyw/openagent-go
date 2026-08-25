@@ -11,21 +11,29 @@ import (
 // Naming follows OpenAI Agents SDK RunHooks conventions.
 // nil RunHooks = no callbacks.
 //
-// OnAgentStart and OnToolStart return an opaque value that the Runner
-// hands back to the corresponding End method. Implementations use this
-// to carry state from start to finish: an OTEL span, a start timestamp,
-// a WASM guest handle — the Runner never inspects it.
+// OnAgentStart and OnToolStart return a context and an opaque value. The
+// returned context replaces the caller's context for downstream operations
+// (tool execution, observer events) — this is how OTel hooks thread span
+// parent-child relationships through the run (the standard OTel pattern:
+// tracer.Start returns an enriched ctx, the hook returns it, the kernel
+// uses it so child spans attach to the parent). The opaque value is handed
+// back to the corresponding End method. Implementations use this to carry
+// state from start to finish: an OTel span, a start timestamp, a WASM
+// guest handle — the Runner never inspects it.
 //
 // OnToolEnd receives result and err as pointers so that hooks can
 // mutate them (redaction, truncation, metadata injection) before the
 // result is stored in memory.
 type RunHooks interface {
 	// OnAgentStart is called once when agent.Run() begins, before the loop.
-	OnAgentStart(ctx context.Context, req ChatCompletionRequest) (any, error)
+	// The returned context is used for the rest of the run (tool calls,
+	// observer events) so hooks can inject trace context.
+	OnAgentStart(ctx context.Context, req ChatCompletionRequest) (context.Context, any, error)
 	// OnAgentEnd is called once when agent.Run() finishes (success, error, or cancel).
 	OnAgentEnd(ctx context.Context, req ChatCompletionRequest, resp *ChatCompletionResponse, runErr error, startState any)
-	// OnToolStart is called before each Tool.Execute.
-	OnToolStart(ctx context.Context, tool FunctionDefinition, args json.RawMessage) (any, error)
+	// OnToolStart is called before each Tool.Execute. The returned context
+	// is used for the tool execution so hooks can inject trace context.
+	OnToolStart(ctx context.Context, tool FunctionDefinition, args json.RawMessage) (context.Context, any, error)
 	// OnToolEnd is called after each Tool.Execute finishes. result is a
 	// pointer — hooks may mutate it (redaction, truncation) before memory
 	// storage. All failures are inside result.Error (single channel).
@@ -60,17 +68,19 @@ type multiHooks struct {
 	list []RunHooks
 }
 
-func (m *multiHooks) OnAgentStart(ctx context.Context, req ChatCompletionRequest) (any, error) {
+func (m *multiHooks) OnAgentStart(ctx context.Context, req ChatCompletionRequest) (context.Context, any, error) {
 	states := make([]any, len(m.list))
 	var firstErr error
 	for i, h := range m.list {
-		s, err := h.OnAgentStart(ctx, req)
+		var s any
+		var err error
+		ctx, s, err = h.OnAgentStart(ctx, req)
 		states[i] = s
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	return states, firstErr
+	return ctx, states, firstErr
 }
 
 func (m *multiHooks) OnAgentEnd(ctx context.Context, req ChatCompletionRequest, resp *ChatCompletionResponse, runErr error, startState any) {
@@ -82,7 +92,7 @@ func (m *multiHooks) OnAgentEnd(ctx context.Context, req ChatCompletionRequest, 
 		// startState). Distribute nil to every hook so none receives a
 		// wrong sibling's state, and surface the mismatch loudly rather
 		// than silently dropping per-hook state.
-		slog.Warn("openagent: MultiHooks.OnAgentEnd startState shape mismatch",
+		slog.Warn("MultiHooks.OnAgentEnd startState shape mismatch",
 			"got", fmt.Sprintf("%T len=%d", startState, 0),
 			"want", fmt.Sprintf("[]any len=%d", len(m.list)),
 		)
@@ -97,17 +107,19 @@ func (m *multiHooks) OnAgentEnd(ctx context.Context, req ChatCompletionRequest, 
 	}
 }
 
-func (m *multiHooks) OnToolStart(ctx context.Context, tool FunctionDefinition, args json.RawMessage) (any, error) {
+func (m *multiHooks) OnToolStart(ctx context.Context, tool FunctionDefinition, args json.RawMessage) (context.Context, any, error) {
 	states := make([]any, len(m.list))
 	var firstErr error
 	for i, h := range m.list {
-		s, err := h.OnToolStart(ctx, tool, args)
+		var s any
+		var err error
+		ctx, s, err = h.OnToolStart(ctx, tool, args)
 		states[i] = s
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	return states, firstErr
+	return ctx, states, firstErr
 }
 
 func (m *multiHooks) OnToolEnd(ctx context.Context, tool FunctionDefinition, args json.RawMessage, result *ToolResult, startState any) {
@@ -117,7 +129,7 @@ func (m *multiHooks) OnToolEnd(ctx context.Context, tool FunctionDefinition, arg
 		// foreign state — distribute nil and warn. Silently zero-filling
 		// (the old behavior) would mask a misconfigured hook pipeline
 		// (e.g. nested MultiHooks) where every hook quietly loses state.
-		slog.Warn("openagent: MultiHooks.OnToolEnd startState shape mismatch",
+		slog.Warn("MultiHooks.OnToolEnd startState shape mismatch",
 			"tool", tool.Name,
 			"got", fmt.Sprintf("%T", startState),
 			"want", fmt.Sprintf("[]any len=%d", len(m.list)),

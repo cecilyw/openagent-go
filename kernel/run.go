@@ -102,11 +102,11 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 	// ── RunHooks.OnAgentStart ──
 	if rt.deps.Hooks != nil {
 		var err error
-		agentHookState, err = rt.deps.Hooks.OnAgentStart(ctx, lastReq)
+		ctx, agentHookState, err = rt.deps.Hooks.OnAgentStart(ctx, lastReq)
 		if err != nil {
 			// Hook infrastructure failure must not kill the run, but must
 			// not stay silent either.
-			slog.Warn("openagent: OnAgentStart hook failed", "error", err)
+			slog.Warn("OnAgentStart hook failed", "error", err)
 		}
 	}
 	defer func() {
@@ -204,7 +204,7 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 			"resources": len(ac.Resources),
 		}, pStart, err)
 		if err != nil {
-			slog.Error("openagent: prompt build failed", "error", err)
+			slog.Error("prompt build failed", "error", err)
 			chSend(ctx, ch, openagent.StreamEvent{Type: openagent.StreamError, Error: err})
 			return nil, err
 		}
@@ -566,6 +566,6 @@ func (rt *Runtime) commit(ctx context.Context, session openagent.Session, msg op
 		"chars": len([]rune(msg.Content)),
 	}, start, err)
 	if err != nil {
-		slog.Error("openagent: memory append failed", "error", err)
+		slog.Error("memory append failed", "error", err)
 	}
 }

@@ -72,7 +72,7 @@ func (rt *Runtime) cancelCompensation(ctx context.Context, session openagent.Ses
 				"chars": len([]rune(msg.Content)),
 			}, start, err)
 			if err != nil {
-				slog.Error("openagent: cancel compensation append failed", "error", err)
+				slog.Error("cancel compensation append failed", "error", err)
 			}
 			sendComp(openagent.StreamEvent{Type: openagent.StreamToolResult, Message: msg})
 			covered[tc.ID] = true

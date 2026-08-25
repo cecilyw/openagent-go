@@ -38,6 +38,27 @@ type Config struct {
 	// backend. A configured endpoint enables OpenViking for memory,
 	// skills, and resources (per-domain opt-out via ContextProviders).
 	OpenViking OpenVikingConfig `json:"openviking,omitempty"`
+	// Telemetry configures OpenTelemetry trace export. When Endpoint is
+	// non-empty, agent runs and tool calls are sent as OTel spans to the
+	// OTLP collector (Jaeger, Tempo, Datadog, Langfuse, Phoenix, ...).
+	Telemetry TelemetryConfig `json:"telemetry,omitempty"`
+}
+
+// TelemetryConfig configures OpenTelemetry trace export.
+type TelemetryConfig struct {
+	// Endpoint is the OTLP trace endpoint URL. When empty, telemetry is
+	// disabled. Example: "http://localhost:4318" (HTTP) or
+	// "localhost:4317" (gRPC).
+	Endpoint string `json:"endpoint,omitempty"`
+	// Protocol selects the OTLP transport: "http" (default) or "grpc".
+	Protocol string `json:"protocol,omitempty"`
+	// ServiceName is the OTel resource service.name attribute.
+	// Default: "openagent".
+	ServiceName string `json:"service_name,omitempty"`
+	// Insecure disables TLS when the endpoint is plain HTTP. Default:
+	// true (most local collectors use plain HTTP). Set false for a
+	// TLS-secured collector.
+	Insecure *bool `json:"insecure,omitempty"`
 }
 
 // ContextProviderConfig overrides the backend for each context capability.

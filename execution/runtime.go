@@ -136,7 +136,9 @@ func (e *ExecutionRuntime) executeOnce(ctx context.Context, session openagent.Se
 			defer func() {
 				e.fireToolHooksEnd(toolCtx, rc.Def, args, result, tc)
 			}()
-			msg := h(toolCtx, session, call, ch)
+			// Use tc.ctx (enriched by OnToolStart) so the builtin handler
+			// and any spans it creates attach to the tool span.
+			msg := h(tc.ctx, session, call, ch)
 			result = &openagent.ToolResult{Content: msg.Content}
 			msg.Content = result.Content
 			msg.Result = result
@@ -152,19 +154,39 @@ func (e *ExecutionRuntime) executeOnce(ctx context.Context, session openagent.Se
 	var toolHookState any
 	if e.cfg.Hooks != nil {
 		var err error
-		toolHookState, err = e.cfg.Hooks.OnToolStart(toolCtx, rc.Def, args)
+		toolCtx, toolHookState, err = e.cfg.Hooks.OnToolStart(toolCtx, rc.Def, args)
 		if err != nil {
-			slog.Warn("openagent: OnToolStart hook failed", "tool", call.Function.Name, "error", err)
+			slog.Warn("OnToolStart hook failed", "tool", call.Function.Name, "error", err)
 		}
 	}
 
 	teStart := time.Now()
 	e.observe(toolCtx, openagent.StageToolExecute, "enter", map[string]any{"tool": call.Function.Name}, time.Time{}, nil)
 	var result *openagent.ToolResult
-	// Pair the leave even when the tool panics (recovered by the job
-	// goroutine above executeOnce) — a dangling enter reads as a stuck
-	// tool to observers. result.AsError() is nil-safe.
+	// Pair the leave + OnToolEnd even when the tool panics (recovered by
+	// the job goroutine above executeOnce) — a dangling enter reads as a
+	// stuck tool to observers, and an un-Ended OTel tool span is never
+	// exported (the trace silently loses the tool call). result.AsError()
+	// is nil-safe. toolHookState may be nil if OnToolStart failed; the
+	// otel/slog hooks handle nil gracefully.
+	//
+	// Order matters: OnToolEnd must run BEFORE ResultPolicy (redaction
+	// happens inside OnToolEnd; truncation happens in ResultPolicy). So
+	// OnToolEnd is called here directly on the normal path, and in the
+	// defer only as a panic fallback (guarding with a flag so it never
+	// runs twice).
+	toolEndDone := false
+	callToolEnd := func() {
+		if toolEndDone {
+			return
+		}
+		toolEndDone = true
+		if e.cfg.Hooks != nil {
+			e.cfg.Hooks.OnToolEnd(toolCtx, rc.Def, args, result, toolHookState)
+		}
+	}
 	defer func() {
+		callToolEnd() // panic-safe: runs only if not already called
 		e.observe(ctx, openagent.StageToolExecute, "leave", toolResultDetail(call.Function.Name, result), teStart, result.AsError())
 	}()
 
@@ -254,9 +276,11 @@ func (e *ExecutionRuntime) executeOnce(ctx context.Context, session openagent.Se
 		result = rc.Tool.Execute(toolCtx, args)
 	}
 
-	if e.cfg.Hooks != nil {
-		e.cfg.Hooks.OnToolEnd(toolCtx, rc.Def, args, result, toolHookState)
-	}
+	// OnToolEnd runs BEFORE ResultPolicy so redaction (inside OnToolEnd)
+	// sees the raw result, and truncation (ResultPolicy) sees the redacted
+	// result. callToolEnd is idempotent — the defer calls it only if the
+	// normal path didn't (i.e. a panic skipped this line).
+	callToolEnd()
 
 	// Result policy (truncation) — after hooks so redaction happens first.
 	if e.cfg.ResultPolicy != nil && result != nil {
@@ -291,25 +315,26 @@ func toolResultMessage(call openagent.ToolCall, result *openagent.ToolResult) op
 type toolHookCtx struct {
 	start     time.Time
 	hookState any
+	ctx       context.Context // enriched by OnToolStart (carries tool span)
 }
 
 func (e *ExecutionRuntime) fireToolHooks(ctx context.Context, def openagent.FunctionDefinition, args json.RawMessage) toolHookCtx {
-	tc := toolHookCtx{start: time.Now()}
+	tc := toolHookCtx{start: time.Now(), ctx: ctx}
 	if e.cfg.Hooks != nil {
 		var err error
-		tc.hookState, err = e.cfg.Hooks.OnToolStart(ctx, def, args)
+		tc.ctx, tc.hookState, err = e.cfg.Hooks.OnToolStart(ctx, def, args)
 		if err != nil {
-			slog.Warn("openagent: OnToolStart hook failed", "tool", def.Name, "error", err)
+			slog.Warn("OnToolStart hook failed", "tool", def.Name, "error", err)
 		}
 	}
-	e.observe(ctx, openagent.StageToolExecute, "enter", map[string]any{"tool": def.Name}, time.Time{}, nil)
+	e.observe(tc.ctx, openagent.StageToolExecute, "enter", map[string]any{"tool": def.Name}, time.Time{}, nil)
 	return tc
 }
 
 func (e *ExecutionRuntime) fireToolHooksEnd(ctx context.Context, def openagent.FunctionDefinition, args json.RawMessage, result *openagent.ToolResult, tc toolHookCtx) {
-	e.observe(ctx, openagent.StageToolExecute, "leave", toolResultDetail(def.Name, result), tc.start, result.AsError())
+	e.observe(tc.ctx, openagent.StageToolExecute, "leave", toolResultDetail(def.Name, result), tc.start, result.AsError())
 	if e.cfg.Hooks != nil {
-		e.cfg.Hooks.OnToolEnd(ctx, def, args, result, tc.hookState)
+		e.cfg.Hooks.OnToolEnd(tc.ctx, def, args, result, tc.hookState)
 	}
 }
 

@@ -66,7 +66,7 @@ func (t *Grep) Execute(ctx context.Context, args json.RawMessage) *openagent.Too
 		if walkErr != nil {
 			// Permission/read failures were silently swallowed, so the
 			// user saw "no matches" for files that were simply unreadable.
-			slog.Warn("openagent: grep walk error", "path", path, "error", walkErr)
+			slog.Warn("grep walk error", "path", path, "error", walkErr)
 			return nil
 		}
 		if ctx.Err() != nil {

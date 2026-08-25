@@ -106,7 +106,7 @@ func (m *Memory) Store(ctx context.Context, scope ctxpkg.ContextScope, item ctxp
 			if err != nil {
 				return fmt.Errorf("sqlite knowledge store: %w", err)
 			}
-			slog.Debug("openagent: knowledge stored (update)", "id", id, "kind", item.Kind, "topic", item.Topic)
+			slog.Debug("knowledge stored (update)", "id", id, "kind", item.Kind, "topic", item.Topic)
 			m.indexEmbedding(ctx, id, item.Content, knowledgeSubject(item))
 			return nil
 		}
@@ -123,7 +123,7 @@ func (m *Memory) Store(ctx context.Context, scope ctxpkg.ContextScope, item ctxp
 	id, _ = res.LastInsertId()
 
 	if id > 0 {
-		slog.Debug("openagent: knowledge stored (insert)", "id", id, "kind", item.Kind, "topic", item.Topic)
+		slog.Debug("knowledge stored (insert)", "id", id, "kind", item.Kind, "topic", item.Topic)
 		m.indexEmbedding(ctx, id, item.Content, knowledgeSubject(item))
 	}
 	return nil

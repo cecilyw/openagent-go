@@ -15,13 +15,13 @@ type hrecord struct {
 	discarded bool
 }
 
-func (h *hrecord) OnAgentStart(context.Context, ChatCompletionRequest) (any, error) {
-	return h.name + ":agent-start", nil
+func (h *hrecord) OnAgentStart(ctx context.Context, _ ChatCompletionRequest) (context.Context, any, error) {
+	return ctx, h.name + ":agent-start", nil
 }
 func (h *hrecord) OnAgentEnd(context.Context, ChatCompletionRequest, *ChatCompletionResponse, error, any) {
 }
-func (h *hrecord) OnToolStart(context.Context, FunctionDefinition, json.RawMessage) (any, error) {
-	return h.name + ":tool-start", nil
+func (h *hrecord) OnToolStart(ctx context.Context, _ FunctionDefinition, _ json.RawMessage) (context.Context, any, error) {
+	return ctx, h.name + ":tool-start", nil
 }
 func (h *hrecord) OnToolEnd(_ context.Context, _ FunctionDefinition, _ json.RawMessage, result *ToolResult, startState any) {
 	if startState == nil {
@@ -45,7 +45,7 @@ func TestMultiHooks_StatePairing(t *testing.T) {
 
 	// Simulate the runner's start→end sequence.
 	ss := &FunctionDefinition{Name: "t"}
-	startState, err := mh.OnToolStart(context.Background(), *ss, nil)
+	_, startState, err := mh.OnToolStart(context.Background(), *ss, nil)
 	if err != nil {
 		t.Fatalf("OnToolStart: %v", err)
 	}

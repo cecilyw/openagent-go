@@ -151,7 +151,7 @@ func (p *DefaultResultPolicy) Apply(ctx context.Context, session Session, result
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		// Truncation failed: log instead of silently flooding the model
 		// with the raw oversized output.
-		slog.Warn("openagent: artifact dir create failed; oversized result passed through", "session", session.ID, "error", err)
+		slog.Warn("artifact dir create failed; oversized result passed through", "session", session.ID, "error", err)
 		return result
 	}
 	path := filepath.Join(dir, "artifact-"+randHex(8)+".txt")
@@ -162,7 +162,7 @@ func (p *DefaultResultPolicy) Apply(ctx context.Context, session Session, result
 	// the model could never inspect what it was told to read.
 	raw = wrapLongLines(raw, maxArtifactLine)
 	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
-		slog.Warn("openagent: artifact write failed; oversized result passed through", "session", session.ID, "error", err)
+		slog.Warn("artifact write failed; oversized result passed through", "session", session.ID, "error", err)
 		return result
 	}
 

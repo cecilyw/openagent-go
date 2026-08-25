@@ -488,7 +488,7 @@ var keyringCmd = &cobra.Command{Use: "keyring", Short: "Manage credentials in th
 var keyringSetCmd = &cobra.Command{
 	Use: "set <key> <value>", Short: "Store a credential", Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return keyringOrFail().Set("openagent", args[0], args[1])
+		return keyringOrFail().Set(version.Name, args[0], args[1])
 	},
 }
 var keyringGetCmd = &cobra.Command{
@@ -496,7 +496,7 @@ var keyringGetCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Same backend as set/delete — reading from a silent in-memory
 		// store would always miss what set wrote to the real keyring.
-		v, err := keyringOrFail().Get("openagent", args[0])
+		v, err := keyringOrFail().Get(version.Name, args[0])
 		if err != nil {
 			return fmt.Errorf("keyring get: %w", err)
 		}
@@ -511,7 +511,7 @@ var keyringGetCmd = &cobra.Command{
 var keyringDeleteCmd = &cobra.Command{
 	Use: "delete <key>", Short: "Remove a credential", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return keyringOrFail().Delete("openagent", args[0])
+		return keyringOrFail().Delete(version.Name, args[0])
 	},
 }
 

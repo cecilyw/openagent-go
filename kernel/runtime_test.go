@@ -374,13 +374,13 @@ type minRedactHook struct {
 	secret string
 }
 
-func (h *minRedactHook) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (any, error) {
-	return nil, nil
+func (h *minRedactHook) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (context.Context, any, error) {
+	return ctx, nil, nil
 }
 func (h *minRedactHook) OnAgentEnd(ctx context.Context, req openagent.ChatCompletionRequest, resp *openagent.ChatCompletionResponse, runErr error, startState any) {
 }
-func (h *minRedactHook) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (any, error) {
-	return nil, nil
+func (h *minRedactHook) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (context.Context, any, error) {
+	return ctx, nil, nil
 }
 func (h *minRedactHook) OnToolEnd(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage, result *openagent.ToolResult, startState any) {
 	if result != nil && result.Content != "" {

@@ -47,21 +47,21 @@ func New(logger *slog.Logger) *Hooks {
 	return &Hooks{logger: logger}
 }
 
-func (h *Hooks) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (any, error) {
+func (h *Hooks) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (context.Context, any, error) {
 	h.logger.InfoContext(ctx, "agent start",
 		"model", req.Model,
 		"messages", len(req.Messages),
 		"tools", len(req.Tools),
 	)
-	return time.Now(), nil
+	return ctx, time.Now(), nil
 }
 
-func (h *Hooks) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (any, error) {
+func (h *Hooks) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (context.Context, any, error) {
 	h.logger.DebugContext(ctx, "tool start",
 		"tool", tool.Name,
 		"args", string(args), // full arguments — debug level is for investigation
 	)
-	return time.Now(), nil
+	return ctx, time.Now(), nil
 }
 
 func (h *Hooks) OnAgentEnd(ctx context.Context, req openagent.ChatCompletionRequest, resp *openagent.ChatCompletionResponse, runErr error, startState any) {

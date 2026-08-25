@@ -21,7 +21,7 @@ func (t *wasmTool) Definition() openagent.FunctionDefinition {
 	var schemaMap map[string]any
 	if len(t.meta.Parameters) > 0 {
 		if err := json.Unmarshal(t.meta.Parameters, &schemaMap); err != nil {
-			slog.Warn("openagent: wasm tool invalid parameters schema", "tool", t.meta.Name, "error", err)
+			slog.Warn("wasm tool invalid parameters schema", "tool", t.meta.Name, "error", err)
 		}
 	}
 	return openagent.FunctionDefinition{

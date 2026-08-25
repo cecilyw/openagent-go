@@ -13,6 +13,7 @@ import (
 	"github.com/yusheng-g/openagent-go/kernel"
 	"github.com/yusheng-g/openagent-go/sandbox/native"
 	"github.com/yusheng-g/openagent-go/summarizer"
+	"github.com/yusheng-g/openagent-go/version"
 )
 
 // RunCLI runs a one-shot chat turn with streaming output to stdout.
@@ -59,9 +60,15 @@ func RunCLI(ctx context.Context, cfg *config.Config, message string) error {
 		agent.WithMaxTurns(50),
 	}
 	opts, skillProvider := buildOpts(opts, caps, m)
-	agentCfg := agent.New("openagent", opts...)
+	agentCfg := agent.New(version.Name, opts...)
 
-	deps := buildRuntimeDeps(caps, cfg.Sensitive)
+	tracer, telemetryShutdown, err := setupTelemetry(ctx, *cfg)
+	if err != nil {
+		return fmt.Errorf("telemetry init: %w", err)
+	}
+	defer telemetryShutdown()
+
+	deps := buildRuntimeDeps(caps, cfg.Sensitive, tracer)
 	deps.Tools = tools
 	deps.SkillProvider = skillProvider
 	if caps.OnMemory() {

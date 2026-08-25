@@ -68,11 +68,11 @@ func (m *teamAgentMemory) Append(ctx context.Context, sessionID string, msg open
 func (m *teamAgentMemory) Recent(ctx context.Context, sessionID string, n int, offset int) ([]openagent.Message, error) {
 	shared, err := m.shared.Recent(ctx, sessionID, n, offset)
 	if err != nil {
-		slog.Warn("openagent: shared memory read failed", "session", sessionID, "error", err)
+		slog.Warn("shared memory read failed", "session", sessionID, "error", err)
 	}
 	priv, err := m.private.Recent(ctx, m.privateKey(sessionID), n, offset)
 	if err != nil {
-		slog.Warn("openagent: private memory read failed", "session", sessionID, "error", err)
+		slog.Warn("private memory read failed", "session", sessionID, "error", err)
 	}
 
 	// Concatenate: shared (narrative) first, then private (own work).
@@ -104,11 +104,11 @@ func (m *teamAgentMemory) Count(ctx context.Context, sessionID string) (int, err
 func (m *teamAgentMemory) RecentAfter(ctx context.Context, sessionID string, throughIndex, n int) ([]openagent.Message, error) {
 	shared, err := m.shared.RecentAfter(ctx, sessionID, throughIndex, n)
 	if err != nil {
-		slog.Warn("openagent: shared memory read failed", "session", sessionID, "error", err)
+		slog.Warn("shared memory read failed", "session", sessionID, "error", err)
 	}
 	priv, err := m.private.RecentAfter(ctx, m.privateKey(sessionID), 0, n)
 	if err != nil {
-		slog.Warn("openagent: private memory read failed", "session", sessionID, "error", err)
+		slog.Warn("private memory read failed", "session", sessionID, "error", err)
 	}
 	out := make([]openagent.Message, 0, len(shared)+len(priv))
 	out = append(out, shared...)
@@ -155,7 +155,7 @@ func (m *teamAgentMemory) Recall(ctx context.Context, scope ctxpkg.ContextScope,
 	if err != nil {
 		// Partial results: shared entries only, but the failure must not
 		// stay silent.
-		slog.Warn("openagent: private knowledge recall failed", "session", scope.SessionID, "error", err)
+		slog.Warn("private knowledge recall failed", "session", scope.SessionID, "error", err)
 		return entries, nil
 	}
 	entries = append(entries, priv...)

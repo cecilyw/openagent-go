@@ -99,8 +99,8 @@ func NewHook(envNames []string) *Hook {
 }
 
 // OnAgentStart is a no-op.
-func (h *Hook) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (any, error) {
-	return nil, nil
+func (h *Hook) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (context.Context, any, error) {
+	return ctx, nil, nil
 }
 
 // OnAgentEnd is a no-op.
@@ -109,8 +109,8 @@ func (h *Hook) OnAgentEnd(ctx context.Context, req openagent.ChatCompletionReque
 
 // OnToolStart is a no-op. Tool args are not redacted by this hook (see
 // package doc — Coverage scope).
-func (h *Hook) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (any, error) {
-	return nil, nil
+func (h *Hook) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (context.Context, any, error) {
+	return ctx, nil, nil
 }
 
 // OnToolEnd replaces every occurrence of each sensitive env-var value in

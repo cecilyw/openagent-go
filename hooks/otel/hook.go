@@ -1,15 +1,29 @@
-// Package otel is an openagent built-in RunHooks implementation that
-// traces the agent lifecycle with OpenTelemetry. Each agent run becomes
-// an "agent.run" span; each tool call a "tool.<name>" child span with
-// args, result length, truncation file refs, and error status — enough to
-// reconstruct what the agent did and why in a tracing backend (Jaeger,
-// Tempo, Datadog, ...).
+// Package otel is an openagent built-in RunHooks + RunObserver implementation
+// that traces the agent lifecycle with OpenTelemetry.
 //
-// Usage (new API — wire via kernel.Deps):
+// RunHooks axis (hook.go):
+//   - Each agent run becomes an "agent.run" span; each tool call a
+//     "tool.<name>" child span with args, result length, truncation file
+//     refs, and error status.
+//
+// RunObserver axis (observer.go):
+//   - Each of the 8 loop stages (memory.fetch, guard.in, prompt.build,
+//     model.call, guard.out, tool.execute, memory.append) becomes a child
+//     span under "agent.run", so the trace shows the full per-turn trajectory.
+//
+// Attributes follow the OTel GenAI semantic conventions (gen_ai.*) where they
+// apply, so AI-native backends (Langfuse, Phoenix, Arize) auto-render token
+// usage and model panels. Agent-specific attrs (agent.turns, tool.args) use
+// the agent.* / tool.* namespace.
+//
+// Usage (wire via kernel.Deps):
 //
 //	tracer := otel.GetTracerProvider().Tracer("openagent")
-//	deps := kernel.Deps{Hooks: otelhooks.New(tracer), ...}
-//	rt := kernel.New(cfg, deps)
+//	deps := kernel.Deps{
+//	    Hooks:    otelhooks.New(tracer),
+//	    Observer: otelhooks.NewObserver(tracer),
+//	    ...
+//	}
 //
 // Combine with hooks/slog for logs and hooks/redact for secret masking
 // (redact FIRST in the MultiHooks chain).
@@ -21,6 +35,7 @@ import (
 	"fmt"
 
 	openagent "github.com/yusheng-g/openagent-go"
+	"github.com/yusheng-g/openagent-go/version"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -36,17 +51,25 @@ func New(tracer trace.Tracer) *Hooks {
 	return &Hooks{tracer: tracer}
 }
 
-func (h *Hooks) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (any, error) {
+func (h *Hooks) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (context.Context, any, error) {
 	ctx, span := h.tracer.Start(ctx, "agent.run",
 		trace.WithAttributes(
+			// OTel GenAI semantic conventions (gen_ai.*).
+			attribute.String("gen_ai.system", version.Name),
+			attribute.String("gen_ai.request.model", req.Model),
+			// Agent-specific attributes.
 			attribute.String("agent.model", req.Model),
 			attribute.Int("agent.messages", len(req.Messages)),
 			attribute.Int("agent.tools", len(req.Tools)),
+			// Binary identity for filtering traces by build.
+			attribute.String("service.name", version.Name),
+			attribute.String("service.version", version.Version),
 		),
 	)
-	// Start a root span and defer End to OnAgentEnd so the duration
-	// covers the entire run loop (including all tool calls).
-	return span, nil
+	// Return the enriched ctx so the kernel threads it to OnToolStart —
+	// child spans then attach to this agent.run span (standard OTel
+	// context propagation).
+	return ctx, span, nil
 }
 
 func (h *Hooks) OnAgentEnd(ctx context.Context, req openagent.ChatCompletionRequest, resp *openagent.ChatCompletionResponse, runErr error, startState any) {
@@ -57,7 +80,12 @@ func (h *Hooks) OnAgentEnd(ctx context.Context, req openagent.ChatCompletionRequ
 	defer span.End()
 
 	if resp != nil {
+		// GenAI usage attributes — recognized by Langfuse/Phoenix/Arize.
 		span.SetAttributes(
+			attribute.Int("gen_ai.usage.input_tokens", resp.Usage.PromptTokens),
+			attribute.Int("gen_ai.usage.output_tokens", resp.Usage.CompletionTokens),
+			attribute.Int("gen_ai.usage.total_tokens", resp.Usage.TotalTokens),
+			// Agent-specific aliases.
 			attribute.Int("agent.prompt_tokens", resp.Usage.PromptTokens),
 			attribute.Int("agent.completion_tokens", resp.Usage.CompletionTokens),
 			attribute.Int("agent.total_tokens", resp.Usage.TotalTokens),
@@ -69,14 +97,16 @@ func (h *Hooks) OnAgentEnd(ctx context.Context, req openagent.ChatCompletionRequ
 	}
 }
 
-func (h *Hooks) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (any, error) {
+func (h *Hooks) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (context.Context, any, error) {
 	ctx, span := h.tracer.Start(ctx, fmt.Sprintf("tool.%s", tool.Name),
 		trace.WithAttributes(
 			attribute.String("tool.name", tool.Name),
 			attribute.String("tool.args", string(args)),
 		),
 	)
-	return span, nil
+	// Return the enriched ctx so the tool execution and stage observer
+	// spans attach to this tool span.
+	return ctx, span, nil
 }
 
 func (h *Hooks) OnToolEnd(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage, result *openagent.ToolResult, startState any) {

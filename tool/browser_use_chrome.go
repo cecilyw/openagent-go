@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/yusheng-g/openagent-go/version"
 )
 
 // Chrome-for-Testing (CfT) auto-download.
@@ -32,9 +33,12 @@ const (
 	// cftDownloadRetries bounds download attempts; a flaky mirror should
 	// not kill the whole tool.
 	cftDownloadRetries = 3
-	// cftCacheDirName is the subdirectory under the OS cache dir.
-	cftCacheDirName = "openagent" + string(filepath.Separator) + "chrome-for-testing"
 )
+
+// cftCacheDirName is the subdirectory under the OS cache dir, named after
+// the binary identity (version.Name) so different builds isolate their
+// Chrome caches.
+var cftCacheDirName = version.Name + string(filepath.Separator) + "chrome-for-testing"
 
 // cftVersionResponse models the relevant slice of the last-known-good JSON.
 type cftVersionResponse struct {

@@ -281,7 +281,7 @@ func (m *MessageStore) readAllLocked(ctx context.Context, sessionID string) ([]o
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
 			// A corrupt line is data loss — log it instead of silently
 			// dropping it.
-			slog.Warn("openagent: skipping corrupt message line", "session", sessionID, "error", err)
+			slog.Warn("skipping corrupt message line", "session", sessionID, "error", err)
 			continue
 		}
 		if msg.Index == 0 {
@@ -350,7 +350,7 @@ func (m *MessageStore) readCompressed(sessionID string) (*openagent.CompressedCo
 	var cc openagent.CompressedContext
 	if err := json.Unmarshal(b, &cc); err != nil {
 		// Corrupt history must not be silently reset to nothing.
-		slog.Warn("openagent: corrupted compressed summary, ignoring", "session", sessionID, "error", err)
+		slog.Warn("corrupted compressed summary, ignoring", "session", sessionID, "error", err)
 		return nil, nil
 	}
 	return &cc, nil

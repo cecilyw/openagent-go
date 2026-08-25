@@ -73,7 +73,7 @@ func (m *Memory) Recall(ctx context.Context, scope ctxpkg.ContextScope, query st
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			// A corrupt line is data loss — log instead of silently
 			// skipping.
-			slog.Warn("openagent: skipping corrupt knowledge line", "error", err)
+			slog.Warn("skipping corrupt knowledge line", "error", err)
 			continue
 		}
 		if rec.ScopeUser != "" && rec.ScopeUser != scope.UserID {

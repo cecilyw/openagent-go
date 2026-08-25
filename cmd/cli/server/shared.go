@@ -1,17 +1,21 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	openagent "github.com/yusheng-g/openagent-go"
 	"github.com/yusheng-g/openagent-go/agent"
 	ctxpkg "github.com/yusheng-g/openagent-go/context"
 	openaiembed "github.com/yusheng-g/openagent-go/embedder/openai"
 	"github.com/yusheng-g/openagent-go/guard/llm"
+	"go.opentelemetry.io/otel/trace"
+	otelhooks "github.com/yusheng-g/openagent-go/hooks/otel"
 	redacthook "github.com/yusheng-g/openagent-go/hooks/redact"
 	sloghooks "github.com/yusheng-g/openagent-go/hooks/slog"
 	"github.com/yusheng-g/openagent-go/kernel"
@@ -25,6 +29,7 @@ import (
 	"github.com/yusheng-g/openagent-go/skill/fs"
 	builtinskills "github.com/yusheng-g/openagent-go/skills"
 	opentool "github.com/yusheng-g/openagent-go/tool"
+	"github.com/yusheng-g/openagent-go/version"
 
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
 )
@@ -437,21 +442,65 @@ func buildOpts(opts []agent.Option, caps config.Capabilities, model openagent.Mo
 	return opts, sp
 }
 
+// setupTelemetry initializes the OpenTelemetry TracerProvider from config.
+// Returns the tracer (nil if telemetry is disabled) and a shutdown function
+// the caller must defer. When cfg.Telemetry.Endpoint is empty, a no-op
+// provider is returned — spans are created but never exported, so the otel
+// hook can be wired unconditionally.
+func setupTelemetry(ctx context.Context, cfg config.Config) (trace.Tracer, func(), error) {
+	insecure := true
+	if cfg.Telemetry.Insecure != nil {
+		insecure = *cfg.Telemetry.Insecure
+	}
+	// ServiceName defaults to version.Name (the binary identity set via
+	// ldflags in build.sh) so the trace's service.name matches the actual
+	// binary name, not a hardcoded string.
+	serviceName := strings.TrimSpace(cfg.Telemetry.ServiceName)
+	if serviceName == "" {
+		serviceName = version.Name
+	}
+	result, err := otelhooks.SetupTracer(ctx, otelhooks.Config{
+		Endpoint:    cfg.Telemetry.Endpoint,
+		Protocol:    cfg.Telemetry.Protocol,
+		ServiceName: serviceName,
+		Insecure:    insecure,
+	})
+	if err != nil {
+		return nil, func() {}, err
+	}
+	shutdown := func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := result.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("telemetry shutdown failed", "error", err)
+		}
+	}
+	return result.Tracer, shutdown, nil
+}
+
 // buildRuntimeDeps returns the always-on runtime dependencies shared by all
 // modes: the RunHooks pipeline and the stage observer. Mode-specific
 // capabilities (Tools, Memory, Approver) are added by the caller.
 //
 // sensitive carries the user-configured sensitive env-var names; it is
 // honored only when caps.OnHooks() is true (redact rides the hooks pipeline).
-// Hook order is redact → slog: redact must run first so logs never see
-// raw secrets.
-func buildRuntimeDeps(caps config.Capabilities, sensitive config.SensitiveConfig) kernel.Deps {
+// tracer, when non-nil, adds an OTel hook that emits agent.run and tool.<name>
+// spans. Hook order is redact → otel → slog: redact first (secrets masked
+// before any other hook sees the data), otel before slog (spans carry the
+// redacted args).
+func buildRuntimeDeps(caps config.Capabilities, sensitive config.SensitiveConfig, tracer trace.Tracer) kernel.Deps {
+	hooks := []openagent.RunHooks{
+		redacthook.NewHook(sensitive.Env),
+	}
+	observers := []openagent.RunObserver{buildSlogObserver()}
+	if tracer != nil {
+		hooks = append(hooks, otelhooks.New(tracer))
+		observers = append(observers, otelhooks.NewObserver(tracer))
+	}
+	hooks = append(hooks, buildSlogHooks())
 	return kernel.Deps{
-		Hooks: openagent.MultiHooks(
-			redacthook.NewHook(sensitive.Env),
-			buildSlogHooks(),
-		),
-		Observer: buildSlogObserver(),
+		Hooks:    openagent.MultiHooks(hooks...),
+		Observer: openagent.MultiObserver(observers...),
 	}
 }
 

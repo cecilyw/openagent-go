@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -68,9 +69,15 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 		agent.WithMaxTurns(100),
 	}
 	opts, skillProvider := buildOpts(opts, caps, firstM)
-	agentCfg := agent.New("openagent", opts...)
+	agentCfg := agent.New(version.Name, opts...)
 
-	deps := buildRuntimeDeps(caps, cfg.Sensitive)
+	tracer, telemetryShutdown, err := setupTelemetry(ctx, *cfg)
+	if err != nil {
+		return fmt.Errorf("telemetry init: %w", err)
+	}
+	defer telemetryShutdown()
+
+	deps := buildRuntimeDeps(caps, cfg.Sensitive, tracer)
 	deps.SkillProvider = skillProvider
 	// Pass nil Mem when --memory=off so the AgentServer skips history
 	// replay and memory cleanup (all s.Mem uses are nil-guarded). The
@@ -153,7 +160,7 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 	// fall back to the first registered model.
 	if cfg.Model != "" {
 		if !srv.SetDefaultModelID(cfg.Model) {
-			slog.Warn("openagent: settings model not in provider list, using first registered", "model", cfg.Model)
+			slog.Warn("settings model not in provider list, using first registered", "model", cfg.Model)
 		}
 	}
 

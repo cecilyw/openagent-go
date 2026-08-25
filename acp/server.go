@@ -696,7 +696,7 @@ func (s *AgentServer) saveMeta(ctx context.Context, id string, cwd string, kind 
 	}
 	info.SetMeta("kind", kind)
 	if err := s.Runtime.Save(ctx, info); err != nil {
-		slog.Warn("openagent: session meta save failed", "error", err)
+		slog.Warn("session meta save failed", "error", err)
 	}
 }
 
@@ -709,7 +709,7 @@ func (s *AgentServer) savePlan(ctx context.Context, sessionID string, entries []
 	}
 	info.SetMeta("plan", entries)
 	if err := s.Runtime.Save(ctx, *info); err != nil {
-		slog.Warn("openagent: session meta save failed", "error", err)
+		slog.Warn("session meta save failed", "error", err)
 	}
 }
 
@@ -752,7 +752,7 @@ func (s *AgentServer) saveMode(ctx context.Context, sessionID string, mode strin
 		ss.modeMu.RUnlock()
 	}
 	if err := s.Runtime.Save(ctx, *info); err != nil {
-		slog.Warn("openagent: session meta save failed", "error", err)
+		slog.Warn("session meta save failed", "error", err)
 	}
 }
 
@@ -790,7 +790,7 @@ func (s *AgentServer) saveConfig(ctx context.Context, sessionID string) {
 	// SetConfigValue while Save marshals the stored value.
 	info.SetMeta("config", ss.ConfigSnapshot())
 	if err := s.Runtime.Save(ctx, *info); err != nil {
-		slog.Warn("openagent: session config save failed", "error", err)
+		slog.Warn("session config save failed", "error", err)
 	}
 }
 
@@ -804,7 +804,7 @@ func (s *AgentServer) saveTotalTokens(ctx context.Context, sessionID string, n i
 	}
 	info.SetMeta("total_tokens", n)
 	if err := s.Runtime.Save(ctx, *info); err != nil {
-		slog.Warn("openagent: session meta save failed", "error", err)
+		slog.Warn("session meta save failed", "error", err)
 	}
 }
 
@@ -1242,7 +1242,7 @@ func (s *AgentServer) OnDeleteSession(ctx context.Context, req openacp.DeleteSes
 	s.removeSession(req.SessionID)
 	// Runtime.Delete removes metadata and messages together.
 	if err := s.Runtime.Delete(ctx, string(req.SessionID)); err != nil {
-		slog.Warn("openagent: session delete failed", "session", req.SessionID, "error", err)
+		slog.Warn("session delete failed", "session", req.SessionID, "error", err)
 	}
 	return &openacp.DeleteSessionResponse{}, nil
 }
@@ -1482,7 +1482,7 @@ func (s *AgentServer) OnSetSessionConfigOption(ctx context.Context, req openacp.
 				} else {
 					// The requested model is not in the provider list —
 					// keep the current model, but don't stay silent.
-					slog.Warn("openagent: requested model not in provider list, keeping current", "session", req.SessionID, "model", v)
+					slog.Warn("requested model not in provider list, keeping current", "session", req.SessionID, "model", v)
 				}
 			}
 		case "thought_level":
@@ -1684,7 +1684,7 @@ func (s *AgentServer) OnPrompt(ctx context.Context, req openacp.PromptRequest, s
 		cpCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		if err := s.Runtime.Checkpoint(cpCtx, string(req.SessionID)); err != nil {
-			slog.Warn("openagent: session checkpoint failed", "session", req.SessionID, "error", err)
+			slog.Warn("session checkpoint failed", "session", req.SessionID, "error", err)
 		}
 	}
 
@@ -1810,7 +1810,7 @@ func (s *AgentServer) updateTitle(ctx context.Context, sessionID openacp.Session
 	if info.Title == "" {
 		info.Title = title
 		if err := s.Runtime.Save(ctx, *info); err != nil {
-			slog.Warn("openagent: session meta save failed", "error", err)
+			slog.Warn("session meta save failed", "error", err)
 		}
 	}
 }
@@ -1850,7 +1850,7 @@ func (s *AgentServer) buildRuntimeForSession(sid openacp.SessionId, ss *agentSes
 		// default instead of leaving cfg.Model nil, which would make a
 		// restored session fail every turn with "no model configured".
 		if v, _ := ss.ConfigString("model"); v != "" && v != s.getDefaultModelID() {
-			slog.Warn("openagent: session model not in provider list, falling back to default", "session", sid, "model", v, "default", s.getDefaultModelID())
+			slog.Warn("session model not in provider list, falling back to default", "session", sid, "model", v, "default", s.getDefaultModelID())
 		}
 		cfg.Model = m
 	}
@@ -2426,7 +2426,7 @@ func (a *acpApprover) Ask(ctx context.Context, call openagent.ToolCall, def open
 			}
 			for _, key := range keys {
 				if err := a.memory.Remember(ctx, session.ID, key, d); err != nil {
-					slog.Warn("openagent: approval always persistence failed", "session", session.ID, "error", err)
+					slog.Warn("approval always persistence failed", "session", session.ID, "error", err)
 				}
 			}
 		}

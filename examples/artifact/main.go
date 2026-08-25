@@ -37,15 +37,15 @@ type ArtifactHook struct {
 }
 
 // No-op — artifact hook only cares about tool results.
-func (h *ArtifactHook) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (any, error) {
-	return nil, nil
+func (h *ArtifactHook) OnAgentStart(ctx context.Context, req openagent.ChatCompletionRequest) (context.Context, any, error) {
+	return ctx, nil, nil
 }
 func (h *ArtifactHook) OnAgentEnd(ctx context.Context, req openagent.ChatCompletionRequest, resp *openagent.ChatCompletionResponse, runErr error, startState any) {
 }
 
 // No-op — artifacts are handled after execution.
-func (h *ArtifactHook) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (any, error) {
-	return nil, nil
+func (h *ArtifactHook) OnToolStart(ctx context.Context, tool openagent.FunctionDefinition, args json.RawMessage) (context.Context, any, error) {
+	return ctx, nil, nil
 }
 
 // OnToolEnd checks result size and saves to disk when it exceeds the threshold.
