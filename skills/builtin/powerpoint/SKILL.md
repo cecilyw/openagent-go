@@ -144,7 +144,7 @@ slide.addImage({ data: ctx.iconSvgData("chart-line", "2563EB"), x: 0.8, y: 1.2, 
 
 - `ctx.resolveAsset()`: file path for PptxGenJS APIs that need a path.
 - `ctx.imageData()`: base64 data URL for local PNG/JPG/GIF/SVG.
-- `ctx.iconSvgData(name, color)`: Font Awesome solid icon as SVG (e.g. `check`, `chart-line`, `shield-halved`).
+- `ctx.iconSvgData(name, color)`: Font Awesome **free-solid** icon as SVG. Only icons in `@fortawesome/free-solid-svg-icons` are available — using an icon name that does not exist in that package will fail. Safe icon names include: `check`, `check-circle`, `check-double`, `xmark`, `circle-xmark`, `triangle-exclamation`, `circle-info`, `circle-question`, `chart-line`, `chart-bar`, `chart-pie`, `arrow-right`, `arrow-up`, `arrow-down`, `arrow-left`, `chevron-right`, `chevron-up`, `chevron-down`, `plus`, `minus`, `star`, `heart`, `bolt`, `fire`, `lightbulb`, `gear`, `cog`, `wrench`, `code`, `terminal`, `database`, `server`, `cloud`, `shield-halved`, `lock`, `key`, `user`, `users`, `building`, `briefcase`, `rocket`, `target`, `flag`, `trophy`, `magnifying-glass`, `download`, `upload`, `trash`, `pen`, `clipboard`, `book`, `book-open`, `graduation-cap`, `certificate`, `id-card`, `envelope`, `phone`, `globe`, `link`, `clock`, `calendar`, `map`, `location-dot`, `camera`, `image`, `video`, `microphone`, `headphones`, `play`, `pause`, `stop`, `forward`, `backward`, `volume-high`, `wifi`, `plug`, `battery-full`, `bell`, `comment`, `comments`, `message`, `thumbs-up`, `thumbs-down`, `face-smile`, `face-frown`. When in doubt, use `circle-info` or omit the icon.
 
 ### Tables and Charts
 
