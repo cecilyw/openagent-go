@@ -76,6 +76,30 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 		ctx = openagent.WithDecisionObserver(ctx, d)
 	}
 
+	// Track last request/response for RunHooks.OnAgentEnd.
+	var lastReq openagent.ChatCompletionRequest
+	var lastResp *openagent.ChatCompletionResponse
+	var agentHookState any
+
+	// ── RunHooks.OnAgentStart ──
+	// Runs BEFORE guard.in so the OTel agent.run span is in ctx when
+	// stage observers fire — otherwise guard.in becomes a root span
+	// disconnected from the agent.run trace.
+	if rt.deps.Hooks != nil {
+		var err error
+		ctx, agentHookState, err = rt.deps.Hooks.OnAgentStart(ctx, lastReq)
+		if err != nil {
+			// Hook infrastructure failure must not kill the run, but must
+			// not stay silent either.
+			slog.Warn("OnAgentStart hook failed", "error", err)
+		}
+	}
+	defer func() {
+		if rt.deps.Hooks != nil {
+			rt.deps.Hooks.OnAgentEnd(ctx, lastReq, lastResp, runErr, agentHookState)
+		}
+	}()
+
 	// Guard.in BEFORE persisting the input: a blocked input must never
 	// reach the store — it would be re-read into the model's context next
 	// turn (same principle as the guard.out comment below).
@@ -93,27 +117,6 @@ func (rt *Runtime) run(ctx context.Context, session openagent.Session, prefix []
 	// Append initial user input to memory.
 	rt.commit(ctx, session, input)
 	rt.logEvent(ctx, session.ID, eventbus.EventUserInput, input.Content, nil)
-
-	// Track last request/response for RunHooks.OnAgentEnd.
-	var lastReq openagent.ChatCompletionRequest
-	var lastResp *openagent.ChatCompletionResponse
-	var agentHookState any
-
-	// ── RunHooks.OnAgentStart ──
-	if rt.deps.Hooks != nil {
-		var err error
-		ctx, agentHookState, err = rt.deps.Hooks.OnAgentStart(ctx, lastReq)
-		if err != nil {
-			// Hook infrastructure failure must not kill the run, but must
-			// not stay silent either.
-			slog.Warn("OnAgentStart hook failed", "error", err)
-		}
-	}
-	defer func() {
-		if rt.deps.Hooks != nil {
-			rt.deps.Hooks.OnAgentEnd(ctx, lastReq, lastResp, runErr, agentHookState)
-		}
-	}()
 
 	var workingMessages []openagent.Message
 	var ac *ctxpkg.AgentContext

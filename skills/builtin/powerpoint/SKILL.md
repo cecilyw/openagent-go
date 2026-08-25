@@ -80,7 +80,86 @@ export default async function build(pptx, ctx) {
 
 ## PptxGenJS Reference
 
-For API patterns, chart examples, bullets, image sizing, icons, and common file-corruption pitfalls, load `pptxgenjs.md`.
+Use this reference when writing the JavaScript build script for the `pptx_write` tool.
+
+### Basic Structure
+
+```javascript
+export default async function build(pptx, ctx) {
+  pptx.layout = "LAYOUT_WIDE";
+  pptx.title = ctx.data?.title || "Presentation";
+
+  const slide = pptx.addSlide();
+  slide.background = { color: "FFFFFF" };
+  slide.addText("Hello", { x: 0.6, y: 0.5, w: 8, h: 0.6, fontSize: 36 });
+}
+```
+
+Useful layouts: `LAYOUT_WIDE` (13.333 x 7.5 in), `LAYOUT_16X9` (10 x 5.625 in), `LAYOUT_4X3` (10 x 7.5 in). Use inches for all `x`, `y`, `w`, `h` values.
+
+### Text
+
+```javascript
+slide.addText("Main title", {
+  x: 0.6, y: 0.4, w: 8.5, h: 0.6,
+  fontFace: "Aptos Display", fontSize: 38, bold: true, color: "111827", margin: 0,
+});
+
+slide.addText([
+  { text: "First point", options: { bullet: true, breakLine: true } },
+  { text: "Second point", options: { bullet: true } },
+], { x: 0.8, y: 1.4, w: 5.4, h: 1.2, fontSize: 17, color: "374151", paraSpaceAfterPt: 8 });
+```
+
+- Use `margin: 0` when aligning text with shapes or icons.
+- Use PptxGenJS bullets; do not type bullet glyphs into strings.
+- Use `breakLine: true` in rich text arrays when items must appear on separate lines.
+
+### Shapes
+
+```javascript
+slide.addShape(pptx.ShapeType.rect, {
+  x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: "F8FAFC" }, line: { color: "F8FAFC" },
+});
+
+slide.addShape(pptx.ShapeType.roundRect, {
+  x: 0.7, y: 1.2, w: 3.5, h: 1.2, rectRadius: 0.08, fill: { color: "FFFFFF" },
+  line: { color: "E5E7EB", width: 1 },
+  shadow: { type: "outer", color: "000000", opacity: 0.12, blur: 2, angle: 45, distance: 1 },
+});
+```
+
+- Hex colors must not include `#`. Do not use 8-character hex for transparency — use `transparency` or `opacity`.
+- Use a fresh options object for each shape; PptxGenJS mutates some option values internally.
+
+### Images and Icons
+
+```javascript
+slide.addImage({ data: ctx.imageData("photo.png"), x: 7.1, y: 1.0, w: 5.4, h: 3.4,
+  sizing: { type: "cover", x: 7.1, y: 1.0, w: 5.4, h: 3.4 } });
+
+slide.addImage({ data: ctx.iconSvgData("chart-line", "2563EB"), x: 0.8, y: 1.2, w: 0.35, h: 0.35 });
+```
+
+- `ctx.resolveAsset()`: file path for PptxGenJS APIs that need a path.
+- `ctx.imageData()`: base64 data URL for local PNG/JPG/GIF/SVG.
+- `ctx.iconSvgData(name, color)`: Font Awesome solid icon as SVG (e.g. `check`, `chart-line`, `shield-halved`).
+
+### Tables and Charts
+
+```javascript
+slide.addTable([["Metric", "Current", "Target"], ["Activation", "42%", "55%"]], {
+  x: 0.7, y: 1.5, w: 6.0, h: 1.2, border: { pt: 1, color: "E5E7EB" }, fontSize: 12,
+});
+
+slide.addChart(pptx.ChartType.bar, [{ name: "Revenue", labels: ["Q1","Q2","Q3","Q4"], values: [12,16,21,28] }], {
+  x: 0.7, y: 1.2, w: 6.2, h: 3.8, barDir: "col", chartColors: ["2563EB"], showValue: true,
+});
+```
+
+### Layout Ideas
+
+Cover (full color/image + large title), Agenda (sidebar + numbered sections), Two-column (text + visual), Card grid (2x2/3x2 with icon+header+body), Timeline/process (numbered steps), Data slide (large chart + stat callouts), Closing (statement/next action).
 
 ## Required QA
 
