@@ -46,9 +46,16 @@ func RunCLI(ctx context.Context, cfg *config.Config, message string) error {
 	workDir, _ := os.Getwd()
 	policy := sandboxPolicy(cfg.Sandbox)
 	sb, err := native.NewWithPolicy(workDir, policy)
+	runToolList := []string{"shell", "read", "write", "ls", "grep", "websearch", "webfetch"}
+	if caps.OnBrowser() {
+		runToolList = append(runToolList, "browser")
+	}
+	if caps.OnOffice() {
+		runToolList = append(runToolList, "office")
+	}
 	var tools []openagent.Tool
 	if err == nil {
-		tools = buildTools(sb, workDir, []string{"shell", "read", "write", "ls", "grep"})
+		tools = buildTools(sb, workDir, runToolList)
 	} else {
 		fmt.Fprintf(os.Stderr, "sandbox unavailable, tools disabled: %v\n", err)
 	}
