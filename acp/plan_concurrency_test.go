@@ -148,6 +148,7 @@ func (s *recordingSender) SendToolCallWithMeta(tc openacp.ToolCallUpdate, meta m
 	return s.SendToolCall(tc)
 }
 func (s *recordingSender) SendAvailableCommands(cmds []openacp.AvailableCommand) error { return nil }
+func (s *recordingSender) SendAvailableSkills(skills []openacp.AvailableSkill) error   { return nil }
 func (s *recordingSender) SendModeUpdate(modeID openacp.SessionModeId) error           { return nil }
 func (s *recordingSender) SendConfigOptionUpdate(opts []openacp.SessionConfigOption) error {
 	return nil

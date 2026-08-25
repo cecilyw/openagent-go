@@ -38,6 +38,13 @@ import (
 // rather than the disk. Load checks this prefix to route the read.
 const embedPathPrefix = "embed:"
 
+// RootEntry pairs a disk root path with a type label ("global",
+// "project") so Discover can stamp SkillInfo.Type.
+type RootEntry struct {
+	Path string
+	Type string
+}
+
 // Loader discovers and loads skills from one or more directory trees and an
 // optional embedded filesystem. When multiple roots are given, Discover scans
 // them in order and skills in later roots override same-name skills from
@@ -49,14 +56,25 @@ const embedPathPrefix = "embed:"
 // The embedded fs.FS (if set via WithEmbedFS) is scanned last, so its skills
 // are the lowest priority — disk skills of the same name always win.
 type Loader struct {
-	roots   []string
+	roots   []RootEntry
 	embedFS fs.FS // nil = no embedded source
 }
 
-// New creates a Loader rooted at the given directories. With a single
-// root it behaves as a classic single-tree loader; passing multiple
-// roots enables the override semantics described on Loader.
+// New creates a Loader rooted at the given directories. Type defaults to
+// "project" for all roots. Use NewWithSources to label roots as "global" or
+// "project" so SkillInfo.Type is populated correctly.
 func New(roots ...string) *Loader {
+	l := &Loader{}
+	for _, r := range roots {
+		l.roots = append(l.roots, RootEntry{Path: r, Type: "project"})
+	}
+	return l
+}
+
+// NewWithSources creates a Loader with type-labeled roots. Each root is
+// a (path, type) pair; type is "global" or "project".
+// Roots are scanned in order; later roots override earlier same-name skills.
+func NewWithSources(roots ...RootEntry) *Loader {
 	return &Loader{roots: roots}
 }
 
@@ -94,7 +112,7 @@ func (l *Loader) Discover(ctx context.Context) ([]openagent.SkillInfo, error) {
 	}
 
 	for _, root := range l.roots {
-		entries, err := os.ReadDir(root)
+		entries, err := os.ReadDir(root.Path)
 		if err != nil {
 			// Missing/unreadable root contributes nothing.
 			continue
@@ -103,7 +121,7 @@ func (l *Loader) Discover(ctx context.Context) ([]openagent.SkillInfo, error) {
 			if !entry.IsDir() {
 				continue
 			}
-			skillDir := filepath.Join(root, entry.Name())
+			skillDir := filepath.Join(root.Path, entry.Name())
 			mdPath := filepath.Join(skillDir, "SKILL.md")
 
 			fm, _, err := parseFrontmatter(mdPath)
@@ -122,6 +140,7 @@ func (l *Loader) Discover(ctx context.Context) ([]openagent.SkillInfo, error) {
 				Description: desc,
 				Frontmatter: fm,
 				Path:        skillDir,
+				Type:        root.Type,
 			})
 		}
 	}
@@ -159,6 +178,7 @@ func (l *Loader) Discover(ctx context.Context) ([]openagent.SkillInfo, error) {
 					Description: desc,
 					Frontmatter: fm,
 					Path:        embedPathPrefix + entry.Name(),
+					Type:        "builtin",
 				})
 			}
 		}

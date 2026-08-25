@@ -47,6 +47,7 @@ type SessionEventSender interface {
 	SendToolCall(update ToolCallUpdate) error
 	SendPlanUpdate(entries []PlanEntry) error
 	SendAvailableCommands(cmds []AvailableCommand) error
+	SendAvailableSkills(skills []AvailableSkill) error
 	SendModeUpdate(modeID SessionModeId) error
 	SendConfigOptionUpdate(opts []SessionConfigOption) error
 	SendUsageUpdate(used, total int, cost *Cost) error
@@ -874,6 +875,11 @@ func (s *promptSender) SendPlanUpdate(entries []PlanEntry) error {
 
 func (s *promptSender) SendAvailableCommands(cmds []AvailableCommand) error {
 	s.send(SessionUpdate{SessionUpdate: "available_commands_update", AvailableCommands: cmds, Meta: nowMeta()})
+	return nil
+}
+
+func (s *promptSender) SendAvailableSkills(skills []AvailableSkill) error {
+	s.send(SessionUpdate{SessionUpdate: "available_skills_update", AvailableSkills: skills, Meta: nowMeta()})
 	return nil
 }
 

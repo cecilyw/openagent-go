@@ -1012,11 +1012,15 @@ func (s *AgentServer) OnNewSession(ctx context.Context, req openacp.NewSessionRe
 	s.putSession(id, ss)
 	s.saveMeta(ctx, string(id), cwd, "acp", req.Meta)
 
-	// Send available commands so the client can show them immediately.
+	// Send available commands and skills so the client can show them immediately.
 	if s.updateSender != nil {
 		s.updateSender.SendSessionUpdate(id, openacp.SessionUpdate{
 			SessionUpdate:     "available_commands_update",
 			AvailableCommands: s.availableCommands(),
+		})
+		s.updateSender.SendSessionUpdate(id, openacp.SessionUpdate{
+			SessionUpdate:  "available_skills_update",
+			AvailableSkills: s.availableSkills(ss),
 		})
 	}
 
@@ -1078,11 +1082,15 @@ func (s *AgentServer) OnLoadSession(ctx context.Context, req openacp.LoadSession
 		s.replayPlan(sender, entries)
 	}
 
-	// Send available commands (same as session/new).
+	// Send available commands and skills (same as session/new).
 	if s.updateSender != nil {
 		s.updateSender.SendSessionUpdate(req.SessionID, openacp.SessionUpdate{
 			SessionUpdate:     "available_commands_update",
 			AvailableCommands: s.availableCommands(),
+		})
+		s.updateSender.SendSessionUpdate(req.SessionID, openacp.SessionUpdate{
+			SessionUpdate:  "available_skills_update",
+			AvailableSkills: s.availableSkills(ss),
 		})
 	}
 
@@ -1378,6 +1386,35 @@ func (s *AgentServer) availableCommands() []openacp.AvailableCommand {
 	return out
 }
 
+// availableSkills returns the skill catalog for the client to render a
+// skill panel or @skill autocomplete. Discovers from the session's
+// SkillProvider (disk + embedded builtin skills).
+func (s *AgentServer) availableSkills(ss *agentSession) []openacp.AvailableSkill {
+	if s.Deps.SkillProvider == nil {
+		return nil
+	}
+	skills, err := s.Deps.SkillProvider.Discover(context.Background())
+	if err != nil || len(skills) == 0 {
+		return nil
+	}
+	out := make([]openacp.AvailableSkill, len(skills))
+	for i, sk := range skills {
+		// Builtin skills have no disk path; leave Path empty so the
+		// frontend can distinguish by Type alone.
+		path := sk.Path
+		if sk.Type == "builtin" {
+			path = ""
+		}
+		out[i] = openacp.AvailableSkill{
+			Name:        sk.Name,
+			Description: sk.Description,
+			Path:        path,
+			Type:        sk.Type,
+		}
+	}
+	return out
+}
+
 // setSessionMode transitions the session to a new mode. When entering plan,
 // the current mode is saved as previousMode so exit_plan_mode can restore it.
 // Callers: OnSetSessionMode (ACP RPC), slash /mode, and OnSetSessionConfigOption.
@@ -1569,6 +1606,7 @@ func (s *AgentServer) OnPrompt(ctx context.Context, req openacp.PromptRequest, s
 
 		sender.SendSessionInfo(title, nil)
 		sender.SendAvailableCommands(s.availableCommands())
+		sender.SendAvailableSkills(s.availableSkills(ss))
 	}
 
 	// ── Session-scoped Runtime, reused across turns ──
@@ -1674,6 +1712,25 @@ func (s *AgentServer) OnPrompt(ctx context.Context, req openacp.PromptRequest, s
 			if evt.Error != nil {
 				sender.SendAgentThought(fmt.Sprintf("[retrying: %v]", evt.Error))
 			}
+
+		case openagent.StreamSkillsUpdated:
+			// reload_skills discovered a new skill set (install/uninstall
+			// on disk). Push the updated catalog to the client so the
+			// frontend skill panel refreshes in real time.
+			skills := make([]openacp.AvailableSkill, len(evt.Skills))
+			for i, sk := range evt.Skills {
+				path := sk.Path
+				if sk.Type == "builtin" {
+					path = ""
+				}
+				skills[i] = openacp.AvailableSkill{
+					Name:        sk.Name,
+					Description: sk.Description,
+					Path:        path,
+					Type:        sk.Type,
+				}
+			}
+			sender.SendAvailableSkills(skills)
 
 		case openagent.StreamDone:
 			if evt.Result != nil {

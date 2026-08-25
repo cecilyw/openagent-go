@@ -357,17 +357,17 @@ func resolveProfileFile(cwd, filename, defaultText string) string {
 // Directories that do not exist are skipped. Returns nil only when there are
 // no disk roots AND no embedded skills.
 func openSkillProvider() skill.Provider {
-	var roots []string
-	for _, dir := range skillDirs() {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			roots = append(roots, dir)
+	var roots []fs.RootEntry
+	for _, re := range skillDirs() {
+		if info, err := os.Stat(re.Path); err == nil && info.IsDir() {
+			roots = append(roots, re)
 		}
 	}
 	embedFS := builtinskills.BuiltinFS()
 	if len(roots) == 0 && embedFS == nil {
 		return nil
 	}
-	loader := fs.New(roots...)
+	loader := fs.NewWithSources(roots...)
 	if embedFS != nil {
 		loader = loader.WithEmbedFS(embedFS)
 	}
@@ -375,11 +375,11 @@ func openSkillProvider() skill.Provider {
 }
 
 // skillDirs returns the skill directory candidates in override order:
-// user-level first (~/.agents/skills), project-level last
-// (<cwd>/.agents/skills, overrides user-level). When home equals cwd the
-// two resolve to the same path and only one entry is returned.
-func skillDirs() []string {
-	var dirs []string
+// user-level first (~/.agents/skills, type="global"), project-level last
+// (<cwd>/.agents/skills, type="project", overrides user-level). When home
+// equals cwd the two resolve to the same path and only one entry is returned.
+func skillDirs() []fs.RootEntry {
+	var dirs []fs.RootEntry
 	seen := make(map[string]struct{})
 
 	home, err := os.UserHomeDir()
@@ -387,7 +387,7 @@ func skillDirs() []string {
 		d := filepath.Join(home, ".agents", "skills")
 		if _, ok := seen[d]; !ok {
 			seen[d] = struct{}{}
-			dirs = append(dirs, d)
+			dirs = append(dirs, fs.RootEntry{Path: d, Type: "global"})
 		}
 	}
 
@@ -396,7 +396,7 @@ func skillDirs() []string {
 		d := filepath.Join(cwd, ".agents", "skills")
 		if _, ok := seen[d]; !ok {
 			seen[d] = struct{}{}
-			dirs = append(dirs, d)
+			dirs = append(dirs, fs.RootEntry{Path: d, Type: "project"})
 		}
 	}
 	return dirs

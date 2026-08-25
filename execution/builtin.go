@@ -141,6 +141,15 @@ func (e *ExecutionRuntime) executeReloadSkills(ctx context.Context, session open
 		}
 	}
 	e.loadedSkillsMu.Unlock()
+	// Notify the stream so the ACP server can push available_skills_update
+	// to the client — the frontend skill panel updates in real time after
+	// a reload (install/uninstall on disk).
+	if ch != nil {
+		select {
+		case ch <- openagent.StreamEvent{Type: openagent.StreamSkillsUpdated, Skills: skills}:
+		case <-ctx.Done():
+		}
+	}
 	return openagent.Message{Role: openagent.RoleTool, ToolCallID: call.ID, Content: fmt.Sprintf("reloaded %d skills", len(skills))}
 }
 

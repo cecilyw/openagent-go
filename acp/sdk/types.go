@@ -594,7 +594,18 @@ type AvailableCommand struct {
 // AvailableCommandInput describes the expected input for a command.
 type AvailableCommandInput struct {
 	Meta map[string]any `json:"_meta,omitempty"`
-	Hint string         `json:"hint"`
+	Hint string                 `json:"hint"`
+}
+
+// AvailableSkill describes a skill the agent has loaded (builtin or
+// discovered from disk). Sent via available_skills_update so the client
+// can render a skill panel or autocomplete @skill mentions.
+type AvailableSkill struct {
+	Meta        map[string]any `json:"_meta,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Path        string         `json:"path,omitempty"` // absolute path to skill directory; empty for builtin
+	Type        string         `json:"type"`           // "builtin", "global", "project"
 }
 
 // AvailableCommandsUpdate is the payload for sessionUpdate "available_commands_update".
@@ -827,6 +838,9 @@ type SessionUpdate struct {
 
 	// available_commands_update
 	AvailableCommands []AvailableCommand `json:"availableCommands,omitempty"`
+
+	// available_skills_update
+	AvailableSkills []AvailableSkill `json:"availableSkills,omitempty"`
 
 	// current_mode_update
 	CurrentModeID SessionModeId `json:"currentModeId,omitempty"`

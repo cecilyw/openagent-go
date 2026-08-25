@@ -20,23 +20,25 @@ type RunResult struct {
 type StreamEventType string
 
 const (
-	StreamThought      StreamEventType = "thought" // reasoning content (o1, deepseek-r1)
-	StreamTextDelta    StreamEventType = "text_delta"
-	StreamToolCall     StreamEventType = "tool_call"
-	StreamToolProgress StreamEventType = "tool_progress" // streaming tool output chunk
-	StreamToolResult   StreamEventType = "tool_result"
-	StreamRetrying     StreamEventType = "retrying"
-	StreamDone         StreamEventType = "done"
-	StreamError        StreamEventType = "error"
-	StreamAborted      StreamEventType = "aborted" // context cancelled, deadline exceeded
+	StreamThought        StreamEventType = "thought" // reasoning content (o1, deepseek-r1)
+	StreamTextDelta      StreamEventType = "text_delta"
+	StreamToolCall       StreamEventType = "tool_call"
+	StreamToolProgress   StreamEventType = "tool_progress" // streaming tool output chunk
+	StreamToolResult     StreamEventType = "tool_result"
+	StreamRetrying       StreamEventType = "retrying"
+	StreamDone           StreamEventType = "done"
+	StreamError          StreamEventType = "error"
+	StreamAborted        StreamEventType = "aborted" // context cancelled, deadline exceeded
+	StreamSkillsUpdated  StreamEventType = "skills_updated" // skill list changed (reload_skills)
 )
 
 // StreamEvent is emitted by RunStream for real-time rendering.
 type StreamEvent struct {
 	Type       StreamEventType
-	Text       string     // text_delta, tool_progress
-	Message    Message    // tool_call, tool_result
-	Result     *RunResult // done
-	Error      error      // error, retrying
-	ToolCallID string     // tool_progress — disambiguates concurrent streaming tools
+	Text       string       // text_delta, tool_progress
+	Message    Message      // tool_call, tool_result
+	Result     *RunResult   // done
+	Error      error        // error, retrying
+	ToolCallID string       // tool_progress — disambiguates concurrent streaming tools
+	Skills     []SkillInfo  // skills_updated — the new skill catalog
 }

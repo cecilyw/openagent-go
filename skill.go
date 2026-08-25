@@ -16,5 +16,6 @@ type SkillInfo struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Frontmatter map[string]any `json:"frontmatter"`
-	Path        string         `json:"path"` // absolute path to skill directory
+	Path        string         `json:"path"` // absolute path to skill directory; "embed:<dir>" for builtin
+	Type        string         `json:"type"` // "builtin", "global", "project"
 }
