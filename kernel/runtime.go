@@ -196,6 +196,13 @@ func New(cfg *agent.Agent, deps Deps) *Runtime {
 // Config returns the agent configuration backing this runtime.
 func (rt *Runtime) Config() *agent.Agent { return rt.cfg }
 
+// SkillProvider returns the session's skill provider (nil if none).
+func (rt *Runtime) SkillProvider() skill.Provider {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+	return rt.deps.SkillProvider
+}
+
 // Model returns the resolved model for the current run (session override
 // wins); nil until run() resolves it.
 func (rt *Runtime) Model() openagent.Model {

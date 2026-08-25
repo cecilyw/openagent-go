@@ -27,8 +27,11 @@ import (
 	wasm "github.com/yusheng-g/openagent-go/plugin/agent/wasm"
 	"github.com/yusheng-g/openagent-go/plugin/wasmhost"
 	"github.com/yusheng-g/openagent-go/process"
+	"github.com/yusheng-g/openagent-go/provider/skill"
 	"github.com/yusheng-g/openagent-go/session"
 	"github.com/yusheng-g/openagent-go/slash"
+	fs "github.com/yusheng-g/openagent-go/skill/fs"
+	builtinskills "github.com/yusheng-g/openagent-go/skills"
 	"github.com/yusheng-g/openagent-go/summarizer"
 	opentool "github.com/yusheng-g/openagent-go/tool"
 	"github.com/yusheng-g/openagent-go/utils"
@@ -1386,14 +1389,53 @@ func (s *AgentServer) availableCommands() []openacp.AvailableCommand {
 	return out
 }
 
+// buildSessionSkillProvider creates a skill provider scoped to the session's
+// cwd. Project-level skills resolve from <cwd>/.agents/skills instead of the
+// server process's cwd. Global (~/.agents/skills) and builtin (embed) sources
+// are unaffected by cwd.
+func (s *AgentServer) buildSessionSkillProvider(cwd string) skill.Provider {
+	var roots []fs.RootEntry
+	// global: ~/.agents/skills
+	if home, err := os.UserHomeDir(); err == nil {
+		d := filepath.Join(home, ".agents", "skills")
+		if info, err := os.Stat(d); err == nil && info.IsDir() {
+			roots = append(roots, fs.RootEntry{Path: d, Type: "global"})
+		}
+	}
+	// project: <session-cwd>/.agents/skills
+	if cwd != "" {
+		d := filepath.Join(cwd, ".agents", "skills")
+		if info, err := os.Stat(d); err == nil && info.IsDir() {
+			roots = append(roots, fs.RootEntry{Path: d, Type: "project"})
+		}
+	}
+	embedFS := builtinskills.BuiltinFS()
+	if len(roots) == 0 && embedFS == nil {
+		return s.Deps.SkillProvider // fallback to server-level provider
+	}
+	loader := fs.NewWithSources(roots...)
+	if embedFS != nil {
+		loader = loader.WithEmbedFS(embedFS)
+	}
+	return skill.NewFSBridge(loader)
+}
+
 // availableSkills returns the skill catalog for the client to render a
 // skill panel or @skill autocomplete. Discovers from the session's
-// SkillProvider (disk + embedded builtin skills).
+// SkillProvider (per-session cwd) when available, falling back to the
+// server-level provider.
 func (s *AgentServer) availableSkills(ss *agentSession) []openacp.AvailableSkill {
-	if s.Deps.SkillProvider == nil {
+	var sp skill.Provider
+	if rt := ss.getRuntime(); rt != nil {
+		sp = rt.SkillProvider()
+	}
+	if sp == nil {
+		sp = s.Deps.SkillProvider
+	}
+	if sp == nil {
 		return nil
 	}
-	skills, err := s.Deps.SkillProvider.Discover(context.Background())
+	skills, err := sp.Discover(context.Background())
 	if err != nil || len(skills) == 0 {
 		return nil
 	}
@@ -1903,6 +1945,12 @@ func (s *AgentServer) buildRuntimeForSession(sid openacp.SessionId, ss *agentSes
 	// chain's Memory layer recalls "always allow" decisions across turns
 	// (written by acpApprover.always into the same instance).
 	deps.ApprovalMemory = s.approvalMemory
+
+	// Build a per-session skill provider so project-level skills
+	// (<cwd>/.agents/skills) resolve against the session's working
+	// directory, not the server process's cwd. Global and builtin
+	// sources are unaffected by cwd.
+	deps.SkillProvider = s.buildSessionSkillProvider(ss.cwd)
 
 	// Resolve model from the session config registry.
 	modelID := s.getDefaultModelID()
