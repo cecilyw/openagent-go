@@ -96,7 +96,7 @@ func main() {
 	fmt.Println("\n=== Running agent ===")
 
 	// Inject AgentRuntime so runtime_* host APIs work in observers.
-	wrt := wasm.BuildAgentRuntime(rt, &session, nil)
+	wrt := wasm.BuildAgentRuntime(rt, &session, nil, nil)
 	ctx = wasmhost.WithAgentRuntime(ctx, wrt)
 	result, err := rt.Run(ctx, session, openagent.UserMessage("Use the echo tool to echo 'hello plugin', then calculate 15+27"))
 	if err != nil {

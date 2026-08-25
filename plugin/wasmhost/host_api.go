@@ -99,11 +99,13 @@ type Logger interface {
 
 // AgentRuntime provides plugins with read/write access to the current
 // Agent and Session during a run. Get reads a named value; Set writes one;
-// SetModel replaces a model in the global registry.
+// SetModel replaces a model in the global registry; SetEmbedding refreshes
+// the configured embedder's credentials in place.
 type AgentRuntime struct {
-	Get      func(key string) (string, bool)
-	Set      func(key string, value string) error
-	SetModel func(provider, modelID, apiKey, baseURL string, maxInputTokens, maxOutputTokens int)
+	Get          func(key string) (string, bool)
+	Set          func(key string, value string) error
+	SetModel     func(provider, modelID, apiKey, baseURL string, maxInputTokens, maxOutputTokens int)
+	SetEmbedding func(baseURL, apiKey, model string)
 }
 
 // Runtime key constants used by AgentRuntime.Get/Set.

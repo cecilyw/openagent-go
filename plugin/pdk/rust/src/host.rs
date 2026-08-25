@@ -42,6 +42,7 @@ mod ffi {
         pub fn runtime_get_metadata(key_p: u32, key_l: u32) -> u64;
         pub fn runtime_set_metadata(key_p: u32, key_l: u32, val_p: u32, val_l: u32) -> u64;
         pub fn runtime_set_model_config(val_p: u32, val_l: u32) -> u64;
+        pub fn runtime_set_embedding_config(val_p: u32, val_l: u32) -> u64;
         pub fn runtime_set_system_prompts(val_p: u32, val_l: u32) -> u64;
         pub fn runtime_set_max_turns(val_p: u32, val_l: u32) -> u64;
     }
@@ -261,6 +262,12 @@ pub fn runtime_set_metadata(key: &str, val: &str) -> Result<(), String> {
 
 pub fn runtime_set_model_config(json: &str) -> Result<(), String> {
     let packed = unsafe { ffi::runtime_set_model_config(json.as_ptr() as u32, json.len() as u32) };
+    let r: HostResult = parse_host(packed);
+    if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
+}
+
+pub fn runtime_set_embedding_config(json: &str) -> Result<(), String> {
+    let packed = unsafe { ffi::runtime_set_embedding_config(json.as_ptr() as u32, json.len() as u32) };
     let r: HostResult = parse_host(packed);
     if !r.error.is_empty() { Err(r.error) } else { Ok(()) }
 }

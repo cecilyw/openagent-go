@@ -37,6 +37,17 @@ func New(baseURL, apiKey, model string) *OpenAI {
 	}
 }
 
+// Update replaces the baseURL, apiKey, and model of an existing embedder
+// in place, under mutex. Used by runtime_set_embedding_config to refresh
+// credentials without restarting the process.
+func (e *OpenAI) Update(baseURL, apiKey, model string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.baseURL = baseURL
+	e.apiKey = apiKey
+	e.model = model
+}
+
 // Embed implements openagent.Embedder.
 func (e *OpenAI) Embed(ctx context.Context, text string) ([]float64, error) {
 	body, err := json.Marshal(map[string]any{
