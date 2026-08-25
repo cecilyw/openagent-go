@@ -109,3 +109,58 @@ func TestUpdateSettingsConcurrent(t *testing.T) {
 		}
 	}
 }
+
+// TUI config round-trips through settings.json: the "tui" section parses
+// into TUIConfig with the expected fields.
+func TestTUIConfigParse(t *testing.T) {
+	p := isolate(t)
+	settings := `{
+		"tui": {
+			"mode": "auto",
+			"suggestions": ["one", "two"],
+			"colors": { "primary": "#ff00ff", "success": "#00ff00" }
+		}
+	}`
+	if err := os.WriteFile(p, []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TUI.Mode != "auto" {
+		t.Fatalf("mode: want auto, got %q", cfg.TUI.Mode)
+	}
+	if len(cfg.TUI.Suggestions) != 2 || cfg.TUI.Suggestions[0] != "one" {
+		t.Fatalf("suggestions: %v", cfg.TUI.Suggestions)
+	}
+	if cfg.TUI.Colors.Primary != "#ff00ff" {
+		t.Fatalf("primary: %q", cfg.TUI.Colors.Primary)
+	}
+	if cfg.TUI.Colors.Success != "#00ff00" {
+		t.Fatalf("success: %q", cfg.TUI.Colors.Success)
+	}
+}
+
+// Mode fallback chain: tui.mode → default_mode → "manual". ApplyDefaults
+// resolves it so the TUI always ends with a non-empty mode.
+func TestTUIConfigModeFallback(t *testing.T) {
+	// 1. neither set → manual
+	cfg := &Config{}
+	ApplyDefaults(cfg, isolate(t))
+	if cfg.TUI.Mode != "manual" {
+		t.Fatalf("empty fallback: want manual, got %q", cfg.TUI.Mode)
+	}
+	// 2. default_mode set, tui.mode empty → inherits default_mode
+	cfg = &Config{DefaultMode: "plan"}
+	ApplyDefaults(cfg, isolate(t))
+	if cfg.TUI.Mode != "plan" {
+		t.Fatalf("default_mode fallback: want plan, got %q", cfg.TUI.Mode)
+	}
+	// 3. tui.mode set → wins over default_mode
+	cfg = &Config{DefaultMode: "plan", TUI: TUIConfig{Mode: "auto"}}
+	ApplyDefaults(cfg, isolate(t))
+	if cfg.TUI.Mode != "auto" {
+		t.Fatalf("tui.mode precedence: want auto, got %q", cfg.TUI.Mode)
+	}
+}

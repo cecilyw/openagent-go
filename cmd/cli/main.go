@@ -20,6 +20,7 @@ import (
 
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
 	"github.com/yusheng-g/openagent-go/cmd/cli/server"
+	"github.com/yusheng-g/openagent-go/cmd/cli/tui"
 	"github.com/yusheng-g/openagent-go/keyring"
 	plugin "github.com/yusheng-g/openagent-go/plugin/cli"
 	cliwasm "github.com/yusheng-g/openagent-go/plugin/cli/wasm"
@@ -113,6 +114,7 @@ func main() {
 	// 6. Build cobra tree.
 	rootCmd.AddCommand(buildServeCmd(cfg))
 	rootCmd.AddCommand(buildRunCmd(cfg))
+	rootCmd.AddCommand(buildTuiCmd(cfg))
 	rootCmd.AddCommand(keyringCmd)
 
 	// 7. Wrap every command's RunE to notify observers on entry/exit.
@@ -240,6 +242,28 @@ func parseArgRule(rule string) cobra.PositionalArgs {
 var rootCmd = &cobra.Command{
 	Use:   version.Name,
 	Short: "openagent CLI",
+}
+
+// ── tui ──
+
+func buildTuiCmd(cfg config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:          "tui",
+		Short:        "Start the interactive TUI",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Configure logging the same way serve/run do, so TUI logs
+			// land in the file (never stderr — would corrupt alt-screen).
+			logCleanup, err := server.SetupLog(cfg.Log)
+			if err != nil {
+				log.Printf("WARNING: log setup failed, using defaults: %v", err)
+			}
+			if logCleanup != nil {
+				defer logCleanup()
+			}
+			return tui.StartInteractiveTUI(version.Version, version.Name, cfg.TUI)
+		},
+	}
 }
 
 // ── serve ──

@@ -42,6 +42,38 @@ type Config struct {
 	// non-empty, agent runs and tool calls are sent as OTel spans to the
 	// OTLP collector (Jaeger, Tempo, Datadog, Langfuse, Phoenix, ...).
 	Telemetry TelemetryConfig `json:"telemetry,omitempty"`
+	// TUI configures the interactive TUI client (openagent tui). When
+	// unset, the TUI uses built-in defaults.
+	TUI TUIConfig `json:"tui,omitempty"`
+}
+
+// TUIConfig configures the interactive TUI client. All fields optional;
+// empty fields keep the built-in defaults.
+type TUIConfig struct {
+	// Mode is the initial session mode ("auto"|"manual"|"plan"). Empty
+	// falls back to DefaultMode, then "manual" (ApplyDefaults resolves).
+	Mode string `json:"mode,omitempty"`
+	// Suggestions overrides the welcome-page placeholder suggestion list.
+	// Empty = built-in defaults.
+	Suggestions []string `json:"suggestions,omitempty"`
+	// Colors overrides the theme palette. Fields left empty keep the
+	// built-in default. Hex strings, e.g. "#0a0a0a".
+	Colors TUIColors `json:"colors,omitempty"`
+}
+
+// TUIColors overrides individual theme palette entries. Every field is
+// optional; an empty string keeps the built-in default for that color.
+type TUIColors struct {
+	BgNormal    string `json:"bg_normal,omitempty"`
+	BgSecondary string `json:"bg_secondary,omitempty"`
+	BgSurface   string `json:"bg_surface,omitempty"`
+	Primary     string `json:"primary,omitempty"`    // plan mode badge / 蓝
+	Success     string `json:"success,omitempty"`    // manual mode badge / 绿
+	Warning     string `json:"warning,omitempty"`    // auto mode badge / 黄
+	Danger      string `json:"danger,omitempty"`
+	TextNormal  string `json:"text_normal,omitempty"`
+	TextAsh     string `json:"text_ash,omitempty"`
+	BorderGray  string `json:"border_gray,omitempty"`
 }
 
 // TelemetryConfig configures OpenTelemetry trace export.
@@ -356,6 +388,15 @@ func ApplyDefaults(cfg *Config, settingsPath string) {
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
+	}
+	// TUI mode resolution: tui.mode → default_mode → "manual". Mirrors
+	// acp/server.go defaultMode() so the TUI and server agree on the
+	// safe default when neither is set.
+	if cfg.TUI.Mode == "" {
+		cfg.TUI.Mode = cfg.DefaultMode
+	}
+	if cfg.TUI.Mode == "" {
+		cfg.TUI.Mode = "manual"
 	}
 }
 
