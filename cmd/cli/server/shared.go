@@ -23,6 +23,7 @@ import (
 	"github.com/yusheng-g/openagent-go/session"
 	sessionsqlite "github.com/yusheng-g/openagent-go/session/sqlite"
 	"github.com/yusheng-g/openagent-go/skill/fs"
+	builtinskills "github.com/yusheng-g/openagent-go/skills"
 	opentool "github.com/yusheng-g/openagent-go/tool"
 
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
@@ -339,14 +340,17 @@ func resolveProfileFile(cwd, filename, defaultText string) string {
 // ── Optional capability builders ──
 
 // openSkillProvider creates a file-system skill provider spanning the skill
-// directories that exist. Roots are passed to fs.New in override order
-// (user-level first, project-level last), so skills in a later root override
-// same-name skills from an earlier root:
+// directories that exist plus the embedded built-in skills (when built with
+// -tags embed). Roots are passed to fs.New in override order (user-level first,
+// project-level last), so skills in a later root override same-name skills
+// from an earlier root:
 //
 //  1. ~/.agents/skills            (user-level)
 //  2. <workspace>/.agents/skills  (project-level, overrides user-level)
+//  3. embedded built-in skills    (lowest priority, -tags embed only)
 //
-// Directories that do not exist are skipped. Returns nil if none exist.
+// Directories that do not exist are skipped. Returns nil only when there are
+// no disk roots AND no embedded skills.
 func openSkillProvider() skill.Provider {
 	var roots []string
 	for _, dir := range skillDirs() {
@@ -354,10 +358,15 @@ func openSkillProvider() skill.Provider {
 			roots = append(roots, dir)
 		}
 	}
-	if len(roots) == 0 {
+	embedFS := builtinskills.BuiltinFS()
+	if len(roots) == 0 && embedFS == nil {
 		return nil
 	}
-	return skill.NewFSBridge(fs.New(roots...))
+	loader := fs.New(roots...)
+	if embedFS != nil {
+		loader = loader.WithEmbedFS(embedFS)
+	}
+	return skill.NewFSBridge(loader)
 }
 
 // skillDirs returns the skill directory candidates in override order:

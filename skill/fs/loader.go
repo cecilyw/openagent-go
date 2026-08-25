@@ -13,11 +13,18 @@
 // Each SKILL.md begins with YAML frontmatter (--- ... ---) containing at minimum
 // name and description. All frontmatter fields are preserved in Frontmatter.
 // The body (after the closing ---) is loaded on demand via Load().
+//
+// In addition to disk roots, a Loader may carry an embedded fs.FS (set via
+// WithEmbedFS) as the lowest-priority source. Embedded skills are bundled into
+// the binary at build time (-tags embed) so the agent ships with built-in
+// skills without requiring on-disk files. Disk roots always override embedded
+// skills of the same name.
 package fs
 
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,15 +34,23 @@ import (
 	openagent "github.com/yusheng-g/openagent-go"
 )
 
-// Loader discovers and loads skills from one or more directory trees.
-// When multiple roots are given, Discover scans them in order and skills
-// in later roots override same-name skills from earlier roots (the
-// earlier entry keeps its position in the result, only its content is
-// replaced). This lets a project-level root (<cwd>/.agents/skills) take
-// priority over a user-level root (~/.agents/skills) when the project
+// embedPathPrefix marks a SkillInfo.Path as pointing into the embedded fs.FS
+// rather than the disk. Load checks this prefix to route the read.
+const embedPathPrefix = "embed:"
+
+// Loader discovers and loads skills from one or more directory trees and an
+// optional embedded filesystem. When multiple roots are given, Discover scans
+// them in order and skills in later roots override same-name skills from
+// earlier roots (the earlier entry keeps its position in the result, only its
+// content is replaced). This lets a project-level root (<cwd>/.agents/skills)
+// take priority over a user-level root (~/.agents/skills) when the project
 // root is passed last.
+//
+// The embedded fs.FS (if set via WithEmbedFS) is scanned last, so its skills
+// are the lowest priority — disk skills of the same name always win.
 type Loader struct {
-	roots []string
+	roots   []string
+	embedFS fs.FS // nil = no embedded source
 }
 
 // New creates a Loader rooted at the given directories. With a single
@@ -45,6 +60,14 @@ func New(roots ...string) *Loader {
 	return &Loader{roots: roots}
 }
 
+// WithEmbedFS adds an embedded filesystem as the lowest-priority skill
+// source. Disk roots (user → project) override embedded skills of the same
+// name. Returns the receiver for chaining.
+func (l *Loader) WithEmbedFS(fsys fs.FS) *Loader {
+	l.embedFS = fsys
+	return l
+}
+
 // Discover scans each root for subdirectories containing SKILL.md, reads
 // each file's YAML frontmatter, and returns a SkillInfo for each valid
 // skill. Roots are processed in order; a skill from a later root with
@@ -52,9 +75,23 @@ func New(roots ...string) *Loader {
 // in place (preserving its position), while skills with new names are
 // appended. Skills missing name or description are skipped. A root that
 // cannot be read is treated as empty rather than failing the whole call.
+//
+// After all disk roots, the embedded fs.FS (if set) is scanned the same way.
+// Embedded skills use a synthetic Path prefixed with "embed:" so Load can
+// route the read back through the embedded filesystem.
 func (l *Loader) Discover(ctx context.Context) ([]openagent.SkillInfo, error) {
 	var skills []openagent.SkillInfo
 	indexByName := make(map[string]int)
+
+	// addSkill inserts or overrides a skill by name, preserving position.
+	addSkill := func(info openagent.SkillInfo) {
+		if idx, ok := indexByName[info.Name]; ok {
+			skills[idx] = info // override in place, keep position
+		} else {
+			indexByName[info.Name] = len(skills)
+			skills = append(skills, info)
+		}
+	}
 
 	for _, root := range l.roots {
 		entries, err := os.ReadDir(root)
@@ -69,7 +106,7 @@ func (l *Loader) Discover(ctx context.Context) ([]openagent.SkillInfo, error) {
 			skillDir := filepath.Join(root, entry.Name())
 			mdPath := filepath.Join(skillDir, "SKILL.md")
 
-			fm, body, err := parseFrontmatter(mdPath)
+			fm, _, err := parseFrontmatter(mdPath)
 			if err != nil {
 				continue
 			}
@@ -80,19 +117,49 @@ func (l *Loader) Discover(ctx context.Context) ([]openagent.SkillInfo, error) {
 				continue
 			}
 
-			info := openagent.SkillInfo{
+			addSkill(openagent.SkillInfo{
 				Name:        name,
 				Description: desc,
 				Frontmatter: fm,
 				Path:        skillDir,
-			}
-			_ = body
+			})
+		}
+	}
 
-			if idx, ok := indexByName[name]; ok {
-				skills[idx] = info // override in place, keep position
-			} else {
-				indexByName[name] = len(skills)
-				skills = append(skills, info)
+	// Embedded source — scanned last, lowest priority. An embedded skill
+	// with the same name as a disk skill is skipped (disk wins); it never
+	// overrides an existing entry.
+	if l.embedFS != nil {
+		entries, err := fs.ReadDir(l.embedFS, ".")
+		if err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				mdPath := filepath.Join(entry.Name(), "SKILL.md")
+				fm, _, err := parseFrontmatterFS(l.embedFS, mdPath)
+				if err != nil {
+					continue
+				}
+				name, _ := fm["name"].(string)
+				desc, _ := fm["description"].(string)
+				if name == "" || desc == "" {
+					continue
+				}
+				// Skip if a disk skill of the same name already exists —
+				// embedded skills are the lowest-priority source.
+				if _, exists := indexByName[name]; exists {
+					continue
+				}
+				// Path uses the embed: prefix + skill dir name so Load
+				// can route back through embedFS. The dir name (not the
+				// skill name) is the filesystem key.
+				addSkill(openagent.SkillInfo{
+					Name:        name,
+					Description: desc,
+					Frontmatter: fm,
+					Path:        embedPathPrefix + entry.Name(),
+				})
 			}
 		}
 	}
@@ -101,20 +168,47 @@ func (l *Loader) Discover(ctx context.Context) ([]openagent.SkillInfo, error) {
 }
 
 // Load reads the SKILL.md for the given skill and returns the body
-// (content after the closing YAML frontmatter).
+// (content after the closing YAML frontmatter). For embedded skills
+// (Path prefixed with "embed:"), the read goes through the embedded
+// fs.FS; for disk skills, through os.ReadFile.
 func (l *Loader) Load(ctx context.Context, skill openagent.SkillInfo) (string, error) {
+	if strings.HasPrefix(skill.Path, embedPathPrefix) {
+		if l.embedFS == nil {
+			return "", fmt.Errorf("embedded skill %q but no embedFS configured", skill.Name)
+		}
+		skillDir := strings.TrimPrefix(skill.Path, embedPathPrefix)
+		mdPath := filepath.Join(skillDir, "SKILL.md")
+		_, body, err := parseFrontmatterFS(l.embedFS, mdPath)
+		return body, err
+	}
 	mdPath := filepath.Join(skill.Path, "SKILL.md")
 	_, body, err := parseFrontmatter(mdPath)
 	return body, err
 }
 
-// parseFrontmatter splits a markdown file into YAML frontmatter (map) and body.
+// parseFrontmatter splits a disk file into YAML frontmatter (map) and body.
 func parseFrontmatter(path string) (map[string]any, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, "", err
 	}
+	return splitFrontmatter(data)
+}
 
+// parseFrontmatterFS splits an embedded file into YAML frontmatter and body.
+func parseFrontmatterFS(fsys fs.FS, path string) (map[string]any, string, error) {
+	data, err := fs.ReadFile(fsys, path)
+	if err != nil {
+		return nil, "", err
+	}
+	return splitFrontmatter(data)
+}
+
+// splitFrontmatter parses raw SKILL.md bytes into YAML frontmatter (map) and
+// the markdown body. Shared by the disk and embedded read paths so the
+// parsing logic (CRLF normalization, closing-separator detection, YAML
+// unmarshal) stays in one place.
+func splitFrontmatter(data []byte) (map[string]any, string, error) {
 	// Normalize CRLF → LF so that SKILL.md files with Windows line
 	// endings are handled identically to Unix ones. This is an in-memory
 	// operation; the file on disk is not modified. LF-only files are

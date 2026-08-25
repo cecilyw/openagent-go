@@ -2,9 +2,11 @@
 # build.sh — convenience build for openagent-go's two binaries.
 #
 # Produces <name> (Go CLI/server) and <name>-tui (Rust TUI client). The Go
-# binary's identity is set via ldflags (version.Name); the Rust TUI bakes
-# <name> in as its *default* spawn target via OPENAGENT_BINARY_NAME, then
-# launches `<name> serve --acp` unless --backend overrides it.
+# binary is built with -tags embed (built-in skills bundled) and -s -w
+# (stripped, smaller binary). The Go binary's identity is set via ldflags
+# (version.Name); the Rust TUI bakes <name> in as its *default* spawn target
+# via OPENAGENT_BINARY_NAME, then launches `<name> serve --acp` unless
+# --backend overrides it.
 #
 # The two binaries do NOT have to be built together: the TUI accepts
 # `--backend "<command>"` at runtime, so a default `openagent-tui` can
@@ -25,8 +27,12 @@ VERSION="${OPENAGENT_VERSION:-$(git describe --tags --always 2>/dev/null || echo
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 
-echo "==> Building Go binary: $NAME (version $VERSION)"
-go build -ldflags "-X github.com/yusheng-g/openagent-go/version.Name=$NAME \
+echo "==> Building Go binary: $NAME (version $VERSION, embedded skills)"
+# -tags embed: bundle built-in skills (skills/builtin/*) into the binary.
+# -s -w: strip symbol table and DWARF debug info for a smaller binary.
+go build -tags embed \
+         -ldflags "-s -w \
+                   -X github.com/yusheng-g/openagent-go/version.Name=$NAME \
                    -X github.com/yusheng-g/openagent-go/version.Version=$VERSION" \
          -o "$NAME" ./cmd/cli/
 
