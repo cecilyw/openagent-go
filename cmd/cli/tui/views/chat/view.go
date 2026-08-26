@@ -33,14 +33,12 @@ func (m *Model) View() tea.View {
 	}
 
 	var background string
-	if m.activeSessionID == "" {
+	if !m.inChat {
 		background = m.renderWelcome()
 	} else {
 		background = m.renderMainView()
 	}
 
-	// Panel overlays (command/help/session/model/skill/permission/slash/notify)
-	// are not ported in this render-only pass. The background page stands alone.
 	return createView(background)
 }
 
@@ -48,26 +46,24 @@ func (m *Model) renderMainView() string {
 	left := m.renderLeft()
 	right := m.renderRight()
 	content := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	return theme.BaseStyle().Width(m.width).Height(m.height).Render(content)
+	return lipgloss.NewStyle().Width(m.width).Height(m.height).Render(content)
 }
 
 func (m *Model) renderLeft() string {
 	leftW := layout.GetLeftWidth(m.width)
 	vpH := layout.GetViewHeight(m.height)
-	// Sync viewport content when messages changed.
 	if m.viewportDirty {
 		m.chatViewport.SetContent(m.renderMessages())
 		m.chatViewport.GotoBottom()
 		m.viewportDirty = false
 	}
 	sb := m.renderScrollbar(vpH)
-	// 上方滚动内容区域 + 滚动条
 	scrollContainer := lipgloss.JoinHorizontal(lipgloss.Top, m.chatViewport.View(), sb)
-	// input
 	input := m.renderInput()
-	// status
 	status := m.renderStatus()
-	return theme.BaseStyle().Width(leftW).Padding(0, 1).Render(lipgloss.JoinVertical(lipgloss.Left, scrollContainer, "", input, status))
+	return lipgloss.NewStyle().Width(leftW).Padding(0, 1).Render(
+		lipgloss.JoinVertical(lipgloss.Left, scrollContainer, "", input, status),
+	)
 }
 
 func createHalf(width int, borderColor color.Color) string {
@@ -84,7 +80,6 @@ func createHalf(width int, borderColor color.Color) string {
 		content += halfBlock
 	}
 
-	// 添加边框样式
 	return content
 
 }
@@ -106,10 +101,8 @@ func (m *Model) renderInput() string {
 		} else if !m.blink || !isFocused {
 			content = contentStyle.Foreground(theme.TextAsh).Render(placeholder)
 		} else {
-			// 渲染第一个字符(带背景色) - 使用 utf8.DecodeRuneInString 正确处理多字节字符(如中文)
 			firstRune, firstSize := utf8.DecodeRuneInString(placeholder)
 			firstChar := theme.BaseStyle().Background(theme.TextNormal).Foreground(theme.TextInk).Render(string(firstRune))
-			// 渲染剩余字符(原样式)
 			remainingText := ""
 			if len(placeholder) > firstSize {
 				remainingText = theme.BaseStyle().Background(theme.BgSurface).Foreground(theme.TextAsh).Render(placeholder[firstSize:])
@@ -133,18 +126,15 @@ func (m *Model) renderInput() string {
 	return lipgloss.JoinVertical(lipgloss.Left, input, footer)
 }
 
-// renderPermissionBadge renders the current session mode as a badge in the
-// input header. Maps the openacp mode id ("auto"|"manual"|"plan") to a color:
-// auto=Success(全自动), manual=Primary(需审批), plan=Warning(先出计划).
 func (m *Model) renderPermissionBadge() string {
 	var col color.Color
 	switch m.mode {
 	case "auto":
-		col = theme.Warning // 黄
+		col = theme.Warning
 	case "plan":
-		col = theme.Primary // 蓝
-	default: // manual (and any unknown falls back to manual styling)
-		col = theme.Success // 绿
+		col = theme.Primary
+	default:
+		col = theme.Success
 	}
 	return theme.BaseStyle().Background(theme.BgSurface).Foreground(col).Render(strings.ToUpper(m.mode))
 }
@@ -205,38 +195,34 @@ func (m *Model) renderScrollbar(height int) string {
 	if height <= 0 {
 		return ""
 	}
-	// 定义滚动条样式
-	thumbStyle := theme.BaseStyle().Background(theme.ThumbBackGround) // 滑块
-	trackStyle := theme.BaseStyle().Background(theme.TrackBackGround) // 轨道
+	thumbStyle := theme.BaseStyle().Background(theme.ThumbBackGround)
+	trackStyle := theme.BaseStyle().Background(theme.TrackBackGround)
 
-	// 预渲染各行
-	emptyLine := trackStyle.Render(" ") // 空轨道行
-	trackLine := trackStyle.Render(" ") // 轨道行
-	thumbLine := thumbStyle.Render(" ") // 滑块行
+	emptyLine := trackStyle.Render(" ")
+	trackLine := trackStyle.Render(" ")
+	thumbLine := thumbStyle.Render(" ")
 
 	totalLines := m.chatViewport.TotalLineCount()
 	yOffset := m.chatViewport.YOffset
 
 	var doc strings.Builder
-	// 如果内容不超过视口高度,显示空轨道
 	if totalLines <= height {
 		for i := 0; i < height; i++ {
-			doc.WriteString(emptyLine) // 空轨道
+			doc.WriteString(emptyLine)
 			if i < height-1 {
 				doc.WriteString("\n")
 			}
 		}
 		return doc.String()
 	}
-	// 渲染滚动条
 	thumbH := max(1, height*height/totalLines)
 	maxOffset := totalLines - height
 	thumbY := yOffset() * (height - thumbH) / maxOffset
 	for i := 0; i < height; i++ {
 		if i >= thumbY && i < thumbY+thumbH {
-			doc.WriteString(thumbLine) // 滑块部分
+			doc.WriteString(thumbLine)
 		} else {
-			doc.WriteString(trackLine) // 轨道部分
+			doc.WriteString(trackLine)
 		}
 		if i < height-1 {
 			doc.WriteString("\n")

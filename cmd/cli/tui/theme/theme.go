@@ -6,22 +6,20 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Package theme holds the TUI color palette and base styles, ported verbatim
-// from the /tmp/tui reference (huawei.com/aicli) so the welcome and chat pages
-// render with the same visual identity.
+// Package theme holds the TUI color palette and base styles.
 
 var (
 	// Color Design
-	BgNormal    = lipgloss.Color("#0a0a0a") // 整体背景
-	BgSecondary = lipgloss.Color("#141414") // 右侧面板
-	BgSurface   = lipgloss.Color("#202021") // 输入框
+	BgNormal    = lipgloss.Color("#0a0a0a") // page background
+	BgSecondary = lipgloss.Color("#141414") // sidebar
+	BgSurface   = lipgloss.Color("#2d2d30") // input + message blocks
 	BgGray      = lipgloss.Color("#888B7E")
 
 	BorderGray = lipgloss.Color("#484848")
 
-	TextNormal   = lipgloss.Color("#fdfcfc") // 用户文本，标题
-	TextAsh      = lipgloss.Color("#9a9898") // 输出文本
-	TextStone    = lipgloss.Color("#6e6e73") // 思考文本
+	TextNormal   = lipgloss.Color("#fdfcfc") // user text, titles
+	TextAsh      = lipgloss.Color("#9a9898") // agent output
+	TextStone    = lipgloss.Color("#6e6e73") // thought text
 	TextMute     = lipgloss.Color("#646262")
 	TextBody     = lipgloss.Color("#424245")
 	TextCharcoal = lipgloss.Color("#302c2c")
@@ -40,7 +38,7 @@ var (
 	WarningHover  = lipgloss.Color("#cc7f08")
 	WarningActive = lipgloss.Color("#995f06")
 
-	// 滚动条颜色
+	// scrollbar colors
 	ThumbBackGround = lipgloss.Color("#484848")
 	TrackBackGround = BgSecondary
 
@@ -48,7 +46,7 @@ var (
 	TrackBackGroundActive = BgSurface
 	ThumbBackGroundDrag   = lipgloss.Color("#666666")
 
-	// 命令的颜色
+	// command palette colors
 	CommandActive   = lipgloss.Color("#fab283")
 	CommandInactive = lipgloss.Color("#995f06")
 )
@@ -62,7 +60,7 @@ func ButtonStyle() lipgloss.Style {
 		Background(BgGray).
 		Foreground(TextNormal).
 		Padding(0, 1).
-		MarginBackground(BgNormal) // 需要设置外边距的背景颜色
+		MarginBackground(BgNormal) // set margin background so margins match the page
 }
 
 func ActiveButtonStyle() lipgloss.Style {

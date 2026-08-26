@@ -261,7 +261,7 @@ func buildTuiCmd(cfg config.Config) *cobra.Command {
 			if logCleanup != nil {
 				defer logCleanup()
 			}
-			return tui.StartInteractiveTUI(version.Version, version.Name, cfg.TUI)
+			return tui.StartInteractiveTUI(version.Version, version.Name, cfg, cfg.TUI)
 		},
 	}
 }

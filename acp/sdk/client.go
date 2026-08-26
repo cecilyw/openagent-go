@@ -81,6 +81,16 @@ func (c *Client) ConnectStdio(ctx context.Context, env []string, command string,
 	return c.connectIO(ctx, stdin, stdout, subprocessCloser(cmd), &stderrBuf), nil
 }
 
+// ConnectIO wires a [Session] to arbitrary io streams and starts the reader
+// goroutine. Use this for in-process connections (e.g. io.Pipe to a
+// [Server.RunTransport] in the same process) instead of spawning a subprocess.
+//
+// stdin is where the client writes JSON-RPC requests (server reads from it);
+// stdout is where the server writes responses (client reads from it).
+func (c *Client) ConnectIO(ctx context.Context, stdin io.Writer, stdout io.Reader) *Session {
+	return c.connectIO(ctx, stdin, stdout, nil, nil)
+}
+
 // connectIO wires a [Session] to arbitrary io streams and starts the reader
 // goroutine. closer (optional) is invoked by [Session.Close] to tear the
 // transport down; stderr (optional) is surfaced via [Session.Stderr].

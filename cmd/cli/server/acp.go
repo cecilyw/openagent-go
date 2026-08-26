@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -33,11 +34,23 @@ import (
 //  5. Construct the agent.
 //  6. Wrap in AgentServer, launch ACP protocol mux on stdin/stdout.
 func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) error {
-	ms, knowledge, sessionStore, cleanup, err := buildMemory(cfg.Embedding, caps.OnEmbedder())
+	server, cleanup, err := BuildACPServer(ctx, cfg, caps)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
+	slog.Info("ACP server starting on stdio")
+	return server.Run(ctx)
+}
+
+// BuildACPServer constructs the ACP server (memory, models, tools, agent,
+// channels) and returns it with a cleanup func. Used by both RunACP (stdio)
+// and RunACPTransport (in-process pipe for the TUI).
+func BuildACPServer(ctx context.Context, cfg *config.Config, caps config.Capabilities) (*openacpsdk.Server, func(), error) {
+	ms, knowledge, sessionStore, cleanup, err := buildMemory(cfg.Embedding, caps.OnEmbedder())
+	if err != nil {
+		return nil, nil, err
+	}
 
 	_, modelInfos := buildModels(cfg.Provider)
 	if len(modelInfos) == 0 {
@@ -73,7 +86,7 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 
 	tracer, telemetryShutdown, err := setupTelemetry(ctx, *cfg)
 	if err != nil {
-		return fmt.Errorf("telemetry init: %w", err)
+		return nil, nil, fmt.Errorf("telemetry init: %w", err)
 	}
 	defer telemetryShutdown()
 
@@ -119,7 +132,7 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 	}
 
 	if err := applyContextProviders(cfg, &deps); err != nil {
-		return err
+		return nil, nil, err
 	}
 	// The extractor captures the MemoryProvider it writes to — build it
 	// AFTER applyContextProviders so the effective provider is used.
@@ -210,6 +223,17 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 		slog.Warn("channel error", "error", err)
 	}
 
-	slog.Info("ACP server starting on stdio")
-	return server.Run(ctx)
+	return server, cleanup, nil
+}
+
+// RunACPTransport builds the ACP server (same as RunACP) but serves on
+// custom I/O streams instead of os.Stdin/os.Stdout. Used by the TUI to
+// run the ACP server in-process via io.Pipe — no subprocess needed.
+func RunACPTransport(ctx context.Context, cfg *config.Config, caps config.Capabilities, w io.Writer, r io.Reader) error {
+	server, cleanup, err := BuildACPServer(ctx, cfg, caps)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	return server.RunTransport(ctx, w, r)
 }

@@ -1,7 +1,6 @@
 package components
 
-// Command describes a slash-command entry shown in panels. Ported verbatim
-// from /tmp/tui so command_tip/help-tip rendering stays identical.
+// Command describes a slash-command entry shown in panels.
 type Command struct {
 	Title  string
 	Key    string
@@ -10,7 +9,7 @@ type Command struct {
 	Icon   string
 	Desc   string
 	Enable bool
-	Space  bool // 空格切换
+	Space  bool // toggle with space key
 }
 
 // VisibleConfig holds the transcript visibility toggles. Only the fields the
