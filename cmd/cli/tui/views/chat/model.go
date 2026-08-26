@@ -155,7 +155,9 @@ func NewModel(ctx context.Context, cancel context.CancelFunc, workDir, ver, name
 
 		mode:         mode,
 		logoColor:    logoColor,
-		logoGradient: logoGradient,
+		// Default gradient: blue → purple → pink. Used when the user hasn't
+		// set tui.logo_gradient or tui.colors.logo_color in settings.json.
+		logoGradient: defaultLogoGradient(logoColor, logoGradient),
 
 		focus: FocusChat,
 
@@ -178,6 +180,21 @@ func NewModel(ctx context.Context, cancel context.CancelFunc, workDir, ver, name
 		tips:       components.NextHelpTip(),
 		suggestion: suggestion,
 	}
+}
+
+// defaultLogoGradient returns the gradient to use for the logo when the user
+// hasn't configured one. If logoGradient is set (2+ stops), use it. If
+// logoColor is set, use it as a single-color (nil gradient). Otherwise fall
+// back to a built-in blue→purple→pink gradient so the logo has color out of
+// the box.
+func defaultLogoGradient(logoColor string, logoGradient []string) []string {
+	if len(logoGradient) > 0 {
+		return logoGradient
+	}
+	if strings.TrimSpace(logoColor) != "" {
+		return nil // single color mode
+	}
+	return []string{"#007aff", "#af52de", "#ff2d92"}
 }
 
 func (m *Model) Init() tea.Cmd {

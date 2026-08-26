@@ -13,10 +13,26 @@ import (
 // foreground. With a single stop, every line uses that color. Returns the
 // art unchanged if neither gradient nor singleColor is set (the caller then
 // applies its own default).
+//
+// All lines are first padded to equal width so that downstream Center/Width
+// alignment (which pads per-line) doesn't shift glyphs out of column.
 func RenderLogoColored(art, singleColor string, gradient []string) string {
 	lines := strings.Split(art, "\n")
 	if len(lines) == 0 {
 		return art
+	}
+
+	// Pad all lines to the same visible width.
+	maxW := 0
+	for _, ln := range lines {
+		if w := lipgloss.Width(ln); w > maxW {
+			maxW = w
+		}
+	}
+	for i, ln := range lines {
+		if w := lipgloss.Width(ln); w < maxW {
+			lines[i] = ln + strings.Repeat(" ", maxW-w)
+		}
 	}
 
 	// Collect non-empty gradient stops.
@@ -40,13 +56,12 @@ func RenderLogoColored(art, singleColor string, gradient []string) string {
 
 	// Single-color path: 1 gradient stop, or the singleColor field.
 	if len(stops) == 1 {
-		singleColor = "" // gradient stop wins
 		return renderSingleColor(lines, stops[0])
 	}
 	if singleColor = strings.TrimSpace(singleColor); singleColor != "" {
 		return renderSingleColor(lines, lipgloss.Color(singleColor))
 	}
-	return art
+	return strings.Join(lines, "\n")
 }
 
 func renderSingleColor(lines []string, c color.Color) string {
