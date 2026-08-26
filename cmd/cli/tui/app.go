@@ -27,6 +27,8 @@ func StartInteractiveTUI(ver, name string, tuiCfg config.TUIConfig) error {
 	theme.ApplyOverrides(tuiColorMap(tuiCfg.Colors))
 	// 2. Override the suggestion list before NewModel consumes the first one.
 	components.SetSuggestions(tuiCfg.Suggestions)
+	// 3. Override the welcome-page logo (empty keeps the built-in art).
+	components.SetLogo(tuiCfg.Logo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -38,7 +40,7 @@ func StartInteractiveTUI(ver, name string, tuiCfg config.TUIConfig) error {
 
 	workDir, _ := os.Getwd()
 
-	p := tea.NewProgram(chat.NewModel(ctx, cancel, workDir, ver, name, tuiCfg.Mode))
+	p := tea.NewProgram(chat.NewModel(ctx, cancel, workDir, ver, name, tuiCfg.Mode, tuiCfg.Colors.LogoColor, tuiCfg.LogoGradient))
 	_, err := p.Run()
 	return err
 }
@@ -77,6 +79,9 @@ func tuiColorMap(c config.TUIColors) map[string]string {
 	}
 	if c.BorderGray != "" {
 		m["border_gray"] = c.BorderGray
+	}
+	if c.LogoColor != "" {
+		m["logo_color"] = c.LogoColor
 	}
 	return m
 }

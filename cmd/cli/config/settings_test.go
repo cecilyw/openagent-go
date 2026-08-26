@@ -118,7 +118,8 @@ func TestTUIConfigParse(t *testing.T) {
 		"tui": {
 			"mode": "auto",
 			"suggestions": ["one", "two"],
-			"colors": { "primary": "#ff00ff", "success": "#00ff00" }
+			"logo": "  ___\n /   \\\n \\___/",
+			"colors": { "primary": "#ff00ff", "success": "#00ff00", "logo_color": "#abcdef" }
 		}
 	}`
 	if err := os.WriteFile(p, []byte(settings), 0o600); err != nil {
@@ -139,6 +140,12 @@ func TestTUIConfigParse(t *testing.T) {
 	}
 	if cfg.TUI.Colors.Success != "#00ff00" {
 		t.Fatalf("success: %q", cfg.TUI.Colors.Success)
+	}
+	if cfg.TUI.Logo != "  ___\n /   \\\n \\___/" {
+		t.Fatalf("logo: %q", cfg.TUI.Logo)
+	}
+	if cfg.TUI.Colors.LogoColor != "#abcdef" {
+		t.Fatalf("logo_color: %q", cfg.TUI.Colors.LogoColor)
 	}
 }
 

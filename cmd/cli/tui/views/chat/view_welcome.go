@@ -9,7 +9,14 @@ import (
 
 func (m *Model) renderWelcome() string {
 	w := m.getContentWidth()
-	logo := theme.BaseStyle().Width(w).Align(lipgloss.Center).PaddingBottom(1).Foreground(theme.TextAsh).Render(components.GetLogo(w))
+	logoArt := components.GetLogo(w)
+	// Apply color: gradient (if set) → single logoColor → default TextAsh.
+	colored := components.RenderLogoColored(logoArt, m.logoColor, m.logoGradient)
+	if colored == logoArt {
+		// no override applied — use theme.LogoColor (defaults to TextAsh)
+		colored = theme.BaseStyle().Foreground(theme.LogoColor).Render(logoArt)
+	}
+	logo := theme.BaseStyle().Width(w).Align(lipgloss.Center).PaddingBottom(1).Render(colored)
 	input := m.renderInput()
 	status := m.renderStatus()
 	content := lipgloss.JoinVertical(lipgloss.Top, logo, input, status, theme.BaseStyle().Width(w).Render(""), theme.BaseStyle().Width(w).Align(lipgloss.Center).Render(m.tips))

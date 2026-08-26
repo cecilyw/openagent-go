@@ -57,6 +57,13 @@ type Model struct {
 	// the server default (acp/server.go defaultMode).
 	mode string
 
+	// logoColor / logoGradient drive the welcome-page logo coloring (from
+	// settings.json tui.colors.logo_color / tui.logo_gradient). When
+	// logoGradient has 2+ entries it wins; otherwise logoColor applies; both
+	// empty falls back to theme.TextAsh.
+	logoColor    string
+	logoGradient []string
+
 	messages []ChatMessage
 
 	spinner components.Loading
@@ -101,9 +108,9 @@ type ChatMessage struct {
 // NewModel builds a render-only chat model. ver is the build version shown in
 // the footer/sidebar; name is reserved for future backend wiring; mode is the
 // initial session mode ("auto"|"manual"|"plan") shown as the input-header
-// badge. mode should already be resolved to a non-empty value by the caller
-// (config.ApplyDefaults handles the fallback chain).
-func NewModel(ctx context.Context, cancel context.CancelFunc, workDir, ver, name, mode string) *Model {
+// badge (resolved by config.ApplyDefaults). logoColor/logoGradient drive the
+// welcome-page logo coloring.
+func NewModel(ctx context.Context, cancel context.CancelFunc, workDir, ver, name, mode, logoColor string, logoGradient []string) *Model {
 	_ = name // reserved for future backend wiring
 	if mode == "" {
 		mode = "manual"
@@ -146,7 +153,9 @@ func NewModel(ctx context.Context, cancel context.CancelFunc, workDir, ver, name
 
 		activeSessionID: "",
 
-		mode: mode,
+		mode:         mode,
+		logoColor:    logoColor,
+		logoGradient: logoGradient,
 
 		focus: FocusChat,
 

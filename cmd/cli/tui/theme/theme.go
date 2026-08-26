@@ -27,6 +27,11 @@ var (
 	TextCharcoal = lipgloss.Color("#302c2c")
 	TextInk      = lipgloss.Color("#201d1d")
 
+	// LogoColor is the welcome-page logo foreground. Defaults to TextAsh
+	// (matches the built-in logo); overridable via settings.json
+	// tui.colors.logo_color.
+	LogoColor = TextAsh
+
 	Primary = lipgloss.Color("#007aff")
 	Danger  = lipgloss.Color("#ff3b30")
 	Success = lipgloss.Color("#30d158")
@@ -77,8 +82,13 @@ func HelpLabel() lipgloss.Style {
 // before any BaseStyle() call, so the overridden vars are picked up.
 //
 // Accepted keys: bg_normal, bg_secondary, bg_surface, primary, success,
-// warning, danger, text_normal, text_ash, border_gray.
+// warning, danger, text_normal, text_ash, border_gray, logo_color.
+//
+// logo_color defaults to TextAsh; when text_ash is overridden but
+// logo_color is not, the logo follows the new TextAsh. When logo_color is
+// set explicitly, it wins.
 func ApplyOverrides(overrides map[string]string) {
+	logoSet := false
 	for key, val := range overrides {
 		if val == "" {
 			continue
@@ -105,7 +115,15 @@ func ApplyOverrides(overrides map[string]string) {
 			TextAsh = c
 		case "border_gray":
 			BorderGray = c
+		case "logo_color":
+			LogoColor = c
+			logoSet = true
 		}
+	}
+	// If logo_color wasn't explicitly set, re-bind it to the (possibly
+	// overridden) TextAsh so the logo tracks text_ash changes.
+	if !logoSet {
+		LogoColor = TextAsh
 	}
 }
 

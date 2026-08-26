@@ -59,6 +59,14 @@ type TUIConfig struct {
 	// Colors overrides the theme palette. Fields left empty keep the
 	// built-in default. Hex strings, e.g. "#0a0a0a".
 	Colors TUIColors `json:"colors,omitempty"`
+	// Logo overrides the welcome-page logo. A multi-line string (newline-
+	// separated); empty = built-in default block-art logo.
+	Logo string `json:"logo,omitempty"`
+	// LogoGradient, when non-empty, renders the logo with a vertical color
+	// gradient (top→bottom) interpolated across the listed hex stops, e.g.
+	// ["#007aff","#ff00ff","#ff3b30"]. Empty = single LogoColor (or the
+	// default text_ash).
+	LogoGradient []string `json:"logo_gradient,omitempty"`
 }
 
 // TUIColors overrides individual theme palette entries. Every field is
@@ -74,6 +82,7 @@ type TUIColors struct {
 	TextNormal  string `json:"text_normal,omitempty"`
 	TextAsh     string `json:"text_ash,omitempty"`
 	BorderGray  string `json:"border_gray,omitempty"`
+	LogoColor   string `json:"logo_color,omitempty"` // welcome-page logo
 }
 
 // TelemetryConfig configures OpenTelemetry trace export.
