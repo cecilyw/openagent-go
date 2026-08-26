@@ -18,8 +18,7 @@ const (
 	secretServiceName      = "org.freedesktop.secrets"
 
 	// Linux kernel keyring parameters.
-	keyringKeyType   = "user"
-	keyringKeyPrefix = "openagent:"
+	keyringKeyType = "user"
 )
 
 // openBackend selects a Linux keyring backend. It prefers Secret Service
@@ -78,11 +77,11 @@ func ensureKeyringLinked() error {
 }
 
 // keyctlBackend stores base64-encoded secrets in the Linux kernel
-// keyring under type "user" with descriptions "openagent:<service>:<key>".
+// keyring under type "user" with descriptions "<service>:<key>".
 type keyctlBackend struct{}
 
 func keyctlDesc(service, key string) string {
-	return keyringKeyPrefix + service + ":" + key
+	return service + ":" + key
 }
 
 func (keyctlBackend) Get(service, key string) (string, error) {
