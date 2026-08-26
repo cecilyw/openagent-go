@@ -71,6 +71,8 @@ type Model struct {
 
 	statusBar components.StatusBar
 
+	turnId int64
+
 	// 聊天交互逻辑
 	chatViewport viewport.Model
 	chatTextarea textarea.Model
@@ -201,21 +203,62 @@ func (m *Model) Init() tea.Cmd {
 	return spinnerTick()
 }
 
-// Update handles only the minimal interactions needed to run the page: window
-// resize, spinner tick, blink, and quit. Input/mouse/ACP handling is deferred.
+// Update handles window resize, spinner/blink ticks, quit, and basic text
+// input (typing + Enter to send). ACP/event-loop wiring is deferred.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.updateWindowSize(msg)
 
+	case tea.FocusMsg:
+		if m.focus == FocusChat {
+			m.chatTextarea.Focus()
+		}
+		return m, nil
+
+	case tea.BlurMsg:
+		if m.focus == FocusChat {
+			m.chatTextarea.Blur()
+		}
+		return m, nil
+
+	case tea.PasteMsg:
+		if m.focus == FocusChat {
+			var cmd tea.Cmd
+			m.chatTextarea, cmd = m.chatTextarea.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
 	case tea.KeyMsg:
-		// Minimal quit binding so the TUI is escapable. Real key handling
-		// (typing, send, slash commands) is out of scope for this pass.
 		if k, ok := msg.(tea.KeyPressMsg); ok {
 			switch k.String() {
 			case "ctrl+c", "esc":
 				return m, tea.Quit
+			case "enter":
+				// Send: move input to transcript, clear textarea,
+				// switch to chat view (create a session).
+				text := m.chatTextarea.Value()
+				if strings.TrimSpace(text) != "" {
+					if m.activeSessionID == "" {
+						m.activeSessionID = "session-1"
+					}
+					m.messages = append(m.messages, ChatMessage{
+						Role:    "user",
+						Content: text,
+						TurnId:  m.turnId,
+					})
+					m.chatTextarea.SetValue("")
+					m.viewportDirty = true
+				}
+				return m, nil
 			}
+		}
+		// Forward all other keys to the textarea.
+		if m.focus == FocusChat {
+			var cmd tea.Cmd
+			m.chatTextarea, cmd = m.chatTextarea.Update(msg)
+			return m, cmd
 		}
 		return m, nil
 
@@ -264,10 +307,25 @@ func blinkTick() tea.Cmd {
 	})
 }
 
-// renderMessages placeholder: no message source yet, so the transcript is
-// empty. Kept as a method so view.go's structure matches the reference.
+// renderMessages renders the message list as a plain-text transcript.
+// Each user message is prefixed with "> ". Agent/error messages render
+// as-is. The viewport is updated with this content when dirty.
 func (m *Model) renderMessages() string {
+	if len(m.messages) == 0 {
+		return ""
+	}
 	var doc strings.Builder
-	_ = doc
-	return ""
+	for _, msg := range m.messages {
+		switch msg.Role {
+		case "user":
+			doc.WriteString("> " + msg.Content + "\n\n")
+		case "agent":
+			doc.WriteString(msg.Content + "\n\n")
+		case "error":
+			doc.WriteString("Error: " + msg.Content + "\n\n")
+		default:
+			doc.WriteString(msg.Content + "\n\n")
+		}
+	}
+	return doc.String()
 }

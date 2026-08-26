@@ -131,11 +131,12 @@ func RenderBlock(text string) string {
 		return ""
 	}
 
-	// Build the bit matrix: glyphHeight rows × (n*glyphWidth) cols.
-	// Each cell is 2 bits packed into a byte: bit0=upper, bit1=lower.
-	// Values: 0=empty, 1=upper(▀), 2=lower(▄), 3=full(█).
+	// Build the bit matrix: glyphHeight rows × (n*(glyphWidth+1)-1) cols.
+	// Each glyph occupies glyphWidth cols, followed by 1 spacer col of zeros
+	// (except after the last glyph). The spacer ensures adjacent glyphs
+	// (e.g. "HH") never touch; the empty-col collapse keeps it to exactly 1.
 	n := len(filtered)
-	cols := n * glyphWidth
+	cols := n*(glyphWidth+1) - 1
 	matrix := make([][]byte, glyphHeight) // [row][col] → 0..3
 	for r := range matrix {
 		matrix[r] = make([]byte, cols)
@@ -145,6 +146,7 @@ func RenderBlock(text string) string {
 		if !ok {
 			bits = blockGlyphs[' ']
 		}
+		base := i * (glyphWidth + 1)
 		for pr := 0; pr < glyphHeight; pr++ {
 			upper := bits[pr*14 : pr*14+7]
 			lower := bits[pr*14+7 : pr*14+14]
@@ -156,8 +158,9 @@ func RenderBlock(text string) string {
 				if lower[c] == '1' {
 					val |= 2
 				}
-				matrix[pr][i*glyphWidth+c] = val
+				matrix[pr][base+c] = val
 			}
+			// col base+glyphWidth is the spacer — left as 0 (already zeroed)
 		}
 	}
 

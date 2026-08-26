@@ -54,6 +54,12 @@ func (m *Model) renderMainView() string {
 func (m *Model) renderLeft() string {
 	leftW := layout.GetLeftWidth(m.width)
 	vpH := layout.GetViewHeight(m.height)
+	// Sync viewport content when messages changed.
+	if m.viewportDirty {
+		m.chatViewport.SetContent(m.renderMessages())
+		m.chatViewport.GotoBottom()
+		m.viewportDirty = false
+	}
 	sb := m.renderScrollbar(vpH)
 	// 上方滚动内容区域 + 滚动条
 	scrollContainer := lipgloss.JoinHorizontal(lipgloss.Top, m.chatViewport.View(), sb)
