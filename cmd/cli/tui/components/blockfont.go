@@ -119,8 +119,9 @@ func sanitizeLogo(text string) (string, int) {
 }
 
 // RenderBlock renders text as a multi-line string using the 7×9 half-block
-// font. Each rune's 126-bit bitmap is decoded into 9 rendered rows of 7
-// characters (█/▀/▄/space). A single space column separates glyphs.
+// font. Each rune's 126-bit bitmap is decoded into a bit matrix (rows ×
+// cols, each cell holds upper+lower bits), then consecutive empty rows and
+// columns are collapsed to single lines/gaps before rendering to █/▀/▄/space.
 func RenderBlock(text string) string {
 	if text == "" {
 		return ""
@@ -129,8 +130,17 @@ func RenderBlock(text string) string {
 	if filtered == "" {
 		return ""
 	}
-	rows := make([]string, glyphHeight)
-	for _, ch := range filtered {
+
+	// Build the bit matrix: glyphHeight rows × (n*glyphWidth) cols.
+	// Each cell is 2 bits packed into a byte: bit0=upper, bit1=lower.
+	// Values: 0=empty, 1=upper(▀), 2=lower(▄), 3=full(█).
+	n := len(filtered)
+	cols := n * glyphWidth
+	matrix := make([][]byte, glyphHeight) // [row][col] → 0..3
+	for r := range matrix {
+		matrix[r] = make([]byte, cols)
+	}
+	for i, ch := range filtered {
 		bits, ok := blockGlyphs[ch]
 		if !ok {
 			bits = blockGlyphs[' ']
@@ -139,38 +149,86 @@ func RenderBlock(text string) string {
 			upper := bits[pr*14 : pr*14+7]
 			lower := bits[pr*14+7 : pr*14+14]
 			for c := 0; c < glyphWidth; c++ {
-				up := upper[c] == '1'
-				dn := lower[c] == '1'
-				switch {
-				case up && dn:
-					rows[pr] += "█"
-				case up:
-					rows[pr] += "▀"
-				case dn:
-					rows[pr] += "▄"
-				default:
-					rows[pr] += " "
+				val := byte(0)
+				if upper[c] == '1' {
+					val |= 1
 				}
+				if lower[c] == '1' {
+					val |= 2
+				}
+				matrix[pr][i*glyphWidth+c] = val
 			}
-			rows[pr] += " " // inter-glyph spacer
 		}
 	}
-	for i := range rows {
-		rows[i] = strings.TrimRight(rows[i], " ")
+
+	// Collapse consecutive empty rows: keep a row if it's non-empty, or if
+	// it's the first empty row after a non-empty run.
+	keepRow := make([]bool, glyphHeight)
+	prevEmpty := false
+	for r := 0; r < glyphHeight; r++ {
+		empty := true
+		for c := 0; c < cols; c++ {
+			if matrix[r][c] != 0 {
+				empty = false
+				break
+			}
+		}
+		if empty {
+			if !prevEmpty {
+				keepRow[r] = true // first empty in a run
+			}
+			prevEmpty = true
+		} else {
+			keepRow[r] = true
+			prevEmpty = false
+		}
 	}
-	// Collapse consecutive empty rows into a single empty row so a logo
-	// of all x-height lowercase letters (whose upper zone rows 0-2 are
-	// empty) doesn't have a tall stack of blank lines.
+
+	// Collapse consecutive empty columns: same logic, transposed.
+	keepCol := make([]bool, cols)
+	prevEmpty = false
+	for c := 0; c < cols; c++ {
+		empty := true
+		for r := 0; r < glyphHeight; r++ {
+			if matrix[r][c] != 0 {
+				empty = false
+				break
+			}
+		}
+		if empty {
+			if !prevEmpty {
+				keepCol[c] = true
+			}
+			prevEmpty = true
+		} else {
+			keepCol[c] = true
+			prevEmpty = false
+		}
+	}
+
+	// Render the kept rows/cols into a string.
 	var out []string
-	for i, row := range rows {
-		if row == "" {
-			// skip if the previous kept row is also empty
-			if len(out) > 0 && out[len(out)-1] == "" {
+	for r := 0; r < glyphHeight; r++ {
+		if !keepRow[r] {
+			continue
+		}
+		var b strings.Builder
+		for c := 0; c < cols; c++ {
+			if !keepCol[c] {
 				continue
 			}
+			switch matrix[r][c] {
+			case 3:
+				b.WriteString("█")
+			case 1:
+				b.WriteString("▀")
+			case 2:
+				b.WriteString("▄")
+			default:
+				b.WriteString(" ")
+			}
 		}
-		out = append(out, row)
-		_ = i
+		out = append(out, strings.TrimRight(b.String(), " "))
 	}
 	return strings.Join(out, "\n")
 }
