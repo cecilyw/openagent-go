@@ -33,8 +33,8 @@ import (
 //  4. Wire summarizer for long-conversation compression.
 //  5. Construct the agent.
 //  6. Wrap in AgentServer, launch ACP protocol mux on stdin/stdout.
-func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) error {
-	server, cleanup, err := BuildACPServer(ctx, cfg, caps)
+func RunACP(ctx context.Context, cfg *config.Config) error {
+	server, cleanup, err := BuildACPServer(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,8 @@ func RunACP(ctx context.Context, cfg *config.Config, caps config.Capabilities) e
 // BuildACPServer constructs the ACP server (memory, models, tools, agent,
 // channels) and returns it with a cleanup func. Used by both RunACP (stdio)
 // and RunACPTransport (in-process pipe for the TUI).
-func BuildACPServer(ctx context.Context, cfg *config.Config, caps config.Capabilities) (*openacpsdk.Server, func(), error) {
+func BuildACPServer(ctx context.Context, cfg *config.Config) (*openacpsdk.Server, func(), error) {
+	caps := cfg.Capabilities
 	ms, knowledge, sessionStore, cleanup, err := buildMemory(cfg.Embedding, caps.OnEmbedder())
 	if err != nil {
 		return nil, nil, err
@@ -229,8 +230,8 @@ func BuildACPServer(ctx context.Context, cfg *config.Config, caps config.Capabil
 // RunACPTransport builds the ACP server (same as RunACP) but serves on
 // custom I/O streams instead of os.Stdin/os.Stdout. Used by the TUI to
 // run the ACP server in-process via io.Pipe — no subprocess needed.
-func RunACPTransport(ctx context.Context, cfg *config.Config, caps config.Capabilities, w io.Writer, r io.Reader) error {
-	server, cleanup, err := BuildACPServer(ctx, cfg, caps)
+func RunACPTransport(ctx context.Context, cfg *config.Config, w io.Writer, r io.Reader) error {
+	server, cleanup, err := BuildACPServer(ctx, cfg)
 	if err != nil {
 		return err
 	}

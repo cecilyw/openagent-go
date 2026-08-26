@@ -13,24 +13,25 @@ import (
 	"github.com/yusheng-g/openagent-go/cmd/cli/tui/components"
 	"github.com/yusheng-g/openagent-go/cmd/cli/tui/theme"
 	"github.com/yusheng-g/openagent-go/cmd/cli/tui/views/chat"
+	"github.com/yusheng-g/openagent-go/version"
 )
 
 // StartInteractiveTUI launches the fullscreen interactive TUI. It runs the
 // ACP server in-process via os.Pipe (no subprocess), connects as an ACP
 // client, and streams agent responses into the chat transcript.
 //
-// cfg provides the full settings (models, memory, capabilities) needed to
-// build the ACP server. Logging is configured by the caller (main.go via
-// server.SetupLog) so the TUI never writes to stderr.
-func StartInteractiveTUI(ver, name string, cfg config.Config, tuiCfg config.TUIConfig) error {
-	// 1. Apply theme color overrides before any BaseStyle() call.
+// ctx is the parent context (from main.go's signal handler); the TUI derives
+// a cancelable child so ctrl+c kills both the TUI and the ACP server.
+// cfg provides everything: models, memory, capabilities, and the TUI section.
+func StartInteractiveTUI(ctx context.Context, cfg config.Config) error {
+	tuiCfg := cfg.TUI
+	ver := version.Version
+
 	theme.ApplyOverrides(tuiColorMap(tuiCfg.Colors))
-	// 2. Override the suggestion list before NewModel consumes the first one.
 	components.SetSuggestions(tuiCfg.Suggestions)
-	// 3. Override the welcome-page logo (empty keeps the built-in art).
 	components.SetLogo(tuiCfg.Logo)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	if err := os.Setenv("TERM", "xterm-256color"); err != nil {
@@ -39,26 +40,21 @@ func StartInteractiveTUI(ver, name string, cfg config.Config, tuiCfg config.TUIC
 
 	workDir, _ := os.Getwd()
 
-	// Create model, then program, then inject program back into model so
-	// goroutines (ACP handler, Prompt) can send tea.Msg via Program.Send.
-	model := chat.NewModel(ctx, cancel, workDir, ver, name, tuiCfg.Mode, tuiCfg.Colors.LogoColor, tuiCfg.LogoGradient)
+	model := chat.NewModel(ctx, cancel, workDir, ver, tuiCfg.Mode, tuiCfg.Colors.LogoColor, tuiCfg.LogoGradient)
 	p := tea.NewProgram(model)
 	model.SetProgram(p)
 
-	// Async: start ACP server in-process via io.Pipe, connect as client.
-	caps := cfg.Capabilities
-	go startACPInProcess(ctx, model, p, cfg, caps, ver, workDir)
+	go startACPInProcess(ctx, model, p, cfg, ver, workDir)
 
 	_, err := p.Run()
 	return err
 }
 
-// startACPInProcess creates two io.Pipe pairs: one for client→server
-// (client writes, server reads) and one for server→client (server writes,
-// client reads). The ACP server runs in a goroutine via RunTransport; the
-// client connects via ConnectIO. Then it performs the initialize/newSession
-// handshake, registers the event handler, and injects the session.
-func startACPInProcess(ctx context.Context, model *chat.Model, p *tea.Program, cfg config.Config, caps config.Capabilities, ver, workDir string) {
+// startACPInProcess creates two os.Pipe pairs for client↔server communication.
+// The ACP server runs in a goroutine via RunACPTransport; the client connects
+// via ConnectIO, performs the initialize/newSession handshake, registers the
+// event handler, and injects the session into the model.
+func startACPInProcess(ctx context.Context, model *chat.Model, p *tea.Program, cfg config.Config, ver, workDir string) {
 	// os.Pipe (buffered, 64KB) lets the client write requests before the
 	// server finishes building; they buffer until RunTransport reads.
 	serverR, clientW, err := os.Pipe()
@@ -74,7 +70,7 @@ func startACPInProcess(ctx context.Context, model *chat.Model, p *tea.Program, c
 
 	// ACP server: build + run in a goroutine.
 	go func() {
-		if err := server.RunACPTransport(ctx, &cfg, caps, serverW, serverR); err != nil {
+		if err := server.RunACPTransport(ctx, &cfg, serverW, serverR); err != nil {
 			p.Send(chat.AcpErrorMsg(err))
 		}
 		_ = serverW.Close()

@@ -31,7 +31,8 @@ import (
 // ── REST server ──
 
 // RunREST starts the REST API server (HTTP + SSE).
-func RunREST(ctx context.Context, cfg *config.Config, caps config.Capabilities) error {
+func RunREST(ctx context.Context, cfg *config.Config) error {
+	caps := cfg.Capabilities
 	models, modelInfos := buildModels(cfg.Provider)
 	m := firstModel(models)
 

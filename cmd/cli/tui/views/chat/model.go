@@ -113,8 +113,7 @@ type ChatMessage struct {
 // the agent name (used for ACP client identity); mode is the initial session
 // mode ("auto"|"manual"|"plan"); logoColor/logoGradient drive the welcome
 // logo coloring.
-func NewModel(ctx context.Context, cancel context.CancelFunc, workDir, ver, name, mode, logoColor string, logoGradient []string) *Model {
-	_ = name // reserved for future backend wiring
+func NewModel(ctx context.Context, cancel context.CancelFunc, workDir, ver, mode, logoColor string, logoGradient []string) *Model {
 	if mode == "" {
 		mode = "manual"
 	}

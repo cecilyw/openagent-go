@@ -261,7 +261,7 @@ func buildTuiCmd(cfg config.Config) *cobra.Command {
 			if logCleanup != nil {
 				defer logCleanup()
 			}
-			return tui.StartInteractiveTUI(version.Version, version.Name, cfg, cfg.TUI)
+			return tui.StartInteractiveTUI(cmd.Context(), cfg)
 		},
 	}
 }
@@ -325,9 +325,9 @@ func buildServeCmd(cfg config.Config) *cobra.Command {
 			}
 			defer cancel()
 			if isACP {
-				return server.RunACP(ctx, &cfg, caps)
+				return server.RunACP(ctx, &cfg)
 			}
-			return server.RunREST(ctx, &cfg, caps)
+			return server.RunREST(ctx, &cfg)
 		},
 	}
 	cmd.Flags().Bool("acp", false, "ACP mode over stdio")
