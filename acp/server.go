@@ -1028,6 +1028,7 @@ func (s *AgentServer) OnNewSession(ctx context.Context, req openacp.NewSessionRe
 	}
 
 	return &openacp.NewSessionResponse{
+		Meta:          map[string]any{"created_at": time.Now().UTC().Format(time.RFC3339Nano)},
 		SessionID:     id,
 		ConfigOptions: s.buildConfigOptions(id),
 		Modes:         s.buildModeState(id),
@@ -1097,7 +1098,15 @@ func (s *AgentServer) OnLoadSession(ctx context.Context, req openacp.LoadSession
 		})
 	}
 
+	// Carry created_at in _meta so the frontend can display the session's
+	// creation time on load (not just on live creation).
+	meta := map[string]any{}
+	if !ss.createdAt.IsZero() {
+		meta["created_at"] = ss.createdAt.UTC().Format(time.RFC3339Nano)
+	}
+
 	return &openacp.LoadSessionResponse{
+		Meta:          meta,
 		ConfigOptions: s.buildConfigOptions(req.SessionID),
 		Modes:         s.buildModeState(req.SessionID),
 	}, nil
