@@ -89,7 +89,9 @@ func RunREST(ctx context.Context, cfg *config.Config) error {
 	}
 
 	if caps.OnSummarizer() && m != nil && caps.OnMemory() {
-		ms.WithSummarizer(summarizer.New(m).WithMaxTokens(agentCfg.MaxCompressedTokens))
+		sumz := summarizer.New(m).WithMaxTokens(agentCfg.MaxCompressedTokens)
+		ms.WithSummarizer(sumz)
+		deps.Summarizer = sumz
 	}
 
 	if err := applyContextProviders(cfg, &deps); err != nil {

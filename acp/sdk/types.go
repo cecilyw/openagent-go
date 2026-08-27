@@ -594,7 +594,7 @@ type AvailableCommand struct {
 // AvailableCommandInput describes the expected input for a command.
 type AvailableCommandInput struct {
 	Meta map[string]any `json:"_meta,omitempty"`
-	Hint string                 `json:"hint"`
+	Hint string         `json:"hint"`
 }
 
 // AvailableSkill describes a skill the agent has loaded (builtin or
@@ -996,6 +996,23 @@ type SessionUpdateSender interface {
 // SetClientRequester before any other handler method.
 type ClientRPCUser interface {
 	SetClientRequester(r ClientRequester)
+}
+
+// TurnTrigger is a function the handler can call to start a turn on a session
+// without a client prompt — e.g. when an async sub-agent completes and the
+// model needs to process the result while the user is idle. It acquires the
+// same per-session lock as a client prompt (sessionLocks), so the triggered
+// turn is fully serialized with user turns — no concurrent turns on the same
+// session. The text becomes the prompt input (a <system-reminder> block for
+// sub-agent completions). Returns when the turn finishes.
+type TurnTrigger func(sid SessionId, text string)
+
+// TurnTriggerUser is an optional interface that AgentHandler implementations
+// may satisfy. The Server detects it at construction time and calls
+// SetTurnTrigger before any other handler method, injecting a function the
+// handler can call to start idle turns.
+type TurnTriggerUser interface {
+	SetTurnTrigger(trigger TurnTrigger)
 }
 
 // rpcResponse is a JSON-RPC 2.0 response — either Result or Error is set.

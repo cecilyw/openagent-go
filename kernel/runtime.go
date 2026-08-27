@@ -55,6 +55,17 @@ type Deps struct {
 	SessionStore session.SessionStore
 	// Compressor owns token-budget compression (summary layer).
 	Compressor session.Compressor
+	// Summarizer is the model-backed summarizer shared with sub-agent
+	// children so their in-memory stores get compaction parity with the
+	// parent. nil = sub-agents degrade to no-compaction. The parent's own
+	// Compressor (a *sqlite.MessageStore) embeds its summarizer privately;
+	// this field is the explicit, shareable handle.
+	Summarizer openagent.Summarizer
+	// SubAgentRegistry tracks resumable sub-agent children for the session.
+	// nil = kernel.New creates a fresh one. Shared by subAgentTool (spawn)
+	// and sendTool (continue) so both address the same live children.
+	// Children use in-memory stores distinct from normal (on-disk) sessions.
+	SubAgentRegistry *childRegistry
 	// MemoryProvider stores/recalls durable knowledge (long-term).
 	MemoryProvider ctxpkg.MemoryProvider
 
@@ -131,6 +142,13 @@ type Runtime struct {
 	state          *ctxpkg.RuntimeState
 }
 
+// SubAgentRegistry returns the session's child registry, or nil when no
+// sub-agents are configured. The ACP layer uses this to wire the onExit
+// completion callback for async sub-agent notifications.
+func (rt *Runtime) SubAgentRegistry() *childRegistry {
+	return rt.deps.SubAgentRegistry
+}
+
 // New creates a Runtime from an agent config and dependencies.
 func New(cfg *agent.Agent, deps Deps) *Runtime {
 	rt := &Runtime{
@@ -158,9 +176,21 @@ func New(cfg *agent.Agent, deps Deps) *Runtime {
 	}
 	// Pre-configured sub-agents become delegation tools: isolated context,
 	// own system prompt, tools resolved at call time (see newSubAgentTool).
-	// Registered in New so the model sees them from the first turn.
+	// Registered in New so the model sees them from the first turn. A shared
+	// childRegistry (one per session, lazily created here) lets sub_agent_send
+	// resume a child spawned by a subAgentTool — both tools hold the same reg.
+	if deps.SubAgentRegistry == nil {
+		deps.SubAgentRegistry = newChildRegistry()
+		rt.deps.SubAgentRegistry = deps.SubAgentRegistry
+	}
 	for _, sa := range cfg.SubAgents {
-		rt.tools = append(rt.tools, rt.newSubAgentTool(sa))
+		rt.tools = append(rt.tools, rt.newSubAgentTool(sa, deps.SubAgentRegistry))
+	}
+	// sub_agent_send lets the model follow up on a spawned sub-agent with
+	// history. Registered only when delegation tools exist, and alongside
+	// them so plan-mode caching (subAgentToolNames) keeps them in lockstep.
+	if len(cfg.SubAgents) > 0 {
+		rt.tools = append(rt.tools, newSendTool(deps.SubAgentRegistry))
 	}
 	if deps.Context != nil {
 		rt.context = deps.Context

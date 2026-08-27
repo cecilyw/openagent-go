@@ -14,7 +14,6 @@ import (
 	ctxpkg "github.com/yusheng-g/openagent-go/context"
 	openaiembed "github.com/yusheng-g/openagent-go/embedder/openai"
 	"github.com/yusheng-g/openagent-go/guard/llm"
-	"go.opentelemetry.io/otel/trace"
 	otelhooks "github.com/yusheng-g/openagent-go/hooks/otel"
 	redacthook "github.com/yusheng-g/openagent-go/hooks/redact"
 	sloghooks "github.com/yusheng-g/openagent-go/hooks/slog"
@@ -30,6 +29,7 @@ import (
 	builtinskills "github.com/yusheng-g/openagent-go/skills"
 	opentool "github.com/yusheng-g/openagent-go/tool"
 	"github.com/yusheng-g/openagent-go/version"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/yusheng-g/openagent-go/cmd/cli/config"
 )
@@ -439,7 +439,37 @@ func buildOpts(opts []agent.Option, caps config.Capabilities, model openagent.Mo
 		opts = append(opts, agent.WithInputGuard(g))
 		opts = append(opts, agent.WithOutputGuard(g.Output()))
 	}
+	// explore is a read-only code-exploration sub-agent. Its tool allowlist
+	// (read/ls/grep/shell) keeps it from mutating files; filterChildTools
+	// additionally strips sub-agent recursion. MaxTurns 100 lets it work
+	// through a read→grep→read investigation in one delegation.
+	opts = append(opts, agent.WithSubAgents(exploreSubAgent()))
 	return opts, sp
+}
+
+// exploreSubAgent is the built-in read-only exploration sub-agent. The model
+// delegates a focused investigation; the child runs in an isolated context
+// (no parent history) with only read/ls/grep/shell and reports back findings.
+func exploreSubAgent() agent.SubAgent {
+	return agent.SubAgent{
+		Name:        "explore",
+		Description: "Read-only code exploration. Use when you need to understand, locate, or analyze code — especially across multiple files or directories. Launch multiple explore sub-agents to cover different areas in parallel, then wait for their completion notifications. Does NOT modify files. Returns an agent_id for follow-up questions via sub_agent_send.",
+		SystemPrompt: "You are a read-only exploration sub-agent. Your job is to locate and understand " +
+			"code, then report findings — not to modify anything. Use read, ls, grep, and read-only " +
+			"shell commands (git, find). Do NOT write or edit files. Deliverable: a concise report " +
+			"answering the task directly — the relevant file paths with line numbers, how the pieces " +
+			"connect, and the minimal code quoted to make the point. Don't dump whole files.",
+		Tools: []string{
+			"read", "ls", "grep", "shell",
+			"websearch", "webfetch",
+			// One-shot headless browser tools — webfetch can't render JS SPAs
+			// (GitHub, docs sites); browser_navigate/screenshot/evaluate/click
+			// are the read-side fallback for those. browser_use_* (persistent
+			// multi-step automation) is excluded — too heavy for exploration.
+			"browser_navigate", "browser_screenshot", "browser_evaluate", "browser_click",
+		},
+		MaxTurns: 100,
+	}
 }
 
 // setupTelemetry initializes the OpenTelemetry TracerProvider from config.

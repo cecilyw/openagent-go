@@ -106,6 +106,9 @@ func BuildACPServer(ctx context.Context, cfg *config.Config) (*openacpsdk.Server
 	if caps.OnMemory() && caps.OnSummarizer() && firstM != nil {
 		sumz = summarizer.New(firstM).WithMaxTokens(agentCfg.MaxCompressedTokens)
 		ms.WithSummarizer(sumz)
+		// Share the summarizer with sub-agent children so their in-memory
+		// stores get compaction parity with the parent.
+		deps.Summarizer = sumz
 	}
 
 	// Plugin manager — loads agent:tools and agent:observers plugins.

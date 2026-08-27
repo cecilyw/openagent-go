@@ -24,6 +24,8 @@ func ToolTitle(name string, args string) string {
 		URL         string `json:"url"`
 		Name        string `json:"name"`
 		Template    string `json:"template"`
+		Task        string `json:"task"`
+		AgentID     string `json:"agent_id"`
 	}
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
 		return name
@@ -115,6 +117,24 @@ func ToolTitle(name string, args string) string {
 		if params.Path != "" {
 			return name + " " + params.Path
 		}
+	case "sub_agent_send":
+		// sub_agent_send <agent_id> <description>
+		if params.AgentID != "" && params.Description != "" {
+			return name + " " + params.AgentID + " " + params.Description
+		}
+		if params.AgentID != "" {
+			return name + " " + params.AgentID
+		}
+	}
+	// Sub-agent delegation tools (explore, general, user-defined): the tool
+	// name is the agent name, identified by the presence of a "task" field
+	// (which no built-in tool uses). MCP tools have "servername_" prefix
+	// and don't carry "task", so they won't match here.
+	if params.Task != "" {
+		if params.Description != "" {
+			return "subagent " + params.Description
+		}
+		return "subagent " + name
 	}
 	return name
 }

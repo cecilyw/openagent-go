@@ -29,9 +29,9 @@ import (
 	"github.com/yusheng-g/openagent-go/process"
 	"github.com/yusheng-g/openagent-go/provider/skill"
 	"github.com/yusheng-g/openagent-go/session"
-	"github.com/yusheng-g/openagent-go/slash"
 	fs "github.com/yusheng-g/openagent-go/skill/fs"
 	builtinskills "github.com/yusheng-g/openagent-go/skills"
+	"github.com/yusheng-g/openagent-go/slash"
 	"github.com/yusheng-g/openagent-go/summarizer"
 	opentool "github.com/yusheng-g/openagent-go/tool"
 	"github.com/yusheng-g/openagent-go/utils"
@@ -59,6 +59,12 @@ type AgentServer struct {
 	clientRPC    openacp.ClientRequester
 	updateSender openacp.SessionUpdateSender
 	cmdRegistry  *slash.Registry // slash command dispatch
+
+	// turnTrigger is set by the SDK mux via TurnTriggerUser. It lets the
+	// server start an idle turn (no client prompt) to process async
+	// sub-agent completions. nil when no trigger is wired (CLI one-shot).
+	turnTriggerMu sync.RWMutex
+	turnTrigger   openacp.TurnTrigger
 
 	// clientCaps holds the capabilities advertised by the client during
 	// initialize. Guarded by mu. Used to gate Agent→Client RPC tool
@@ -493,6 +499,46 @@ func (s *AgentServer) SetClientRequester(r openacp.ClientRequester) {
 
 var _ openacp.ClientRPCUser = (*AgentServer)(nil)
 var _ openacp.AgentHandler = (*AgentServer)(nil)
+var _ openacp.TurnTriggerUser = (*AgentServer)(nil)
+
+// SetTurnTrigger implements openacp.TurnTriggerUser. The SDK mux injects a
+// function the server calls to start an idle turn (no client prompt) — used
+// when an async sub-agent completes and the model needs to process the result
+// immediately, not "whenever the user comes back". The trigger acquires the
+// same per-session lock as a client prompt, so idle turns and user turns are
+// fully serialized.
+func (s *AgentServer) SetTurnTrigger(trigger openacp.TurnTrigger) {
+	s.turnTriggerMu.Lock()
+	s.turnTrigger = trigger
+	s.turnTriggerMu.Unlock()
+}
+
+// triggerIdleTurn calls the injected turn trigger if one is wired. Returns
+// false when no trigger is available (CLI one-shot, or SDK not yet wired) —
+// the caller falls back to synchronous execution in that case.
+func (s *AgentServer) triggerIdleTurn(sid openacp.SessionId, text string) bool {
+	s.turnTriggerMu.RLock()
+	trigger := s.turnTrigger
+	s.turnTriggerMu.RUnlock()
+	if trigger == nil {
+		return false
+	}
+	go trigger(sid, text)
+	return true
+}
+
+// killSubAgents cancels every running async sub-agent for a session and
+// clears the registry. Called on session close/delete so background goroutines
+// don't outlive the session.
+func (s *AgentServer) killSubAgents(ss *agentSession) {
+	rt := ss.getRuntime()
+	if rt == nil {
+		return
+	}
+	if reg := rt.SubAgentRegistry(); reg != nil {
+		reg.KillAll()
+	}
+}
 
 // SetModel replaces or inserts a model in the registry. Used by
 // runtime_set_model_config. When the model already exists, empty apiKey
@@ -1022,7 +1068,7 @@ func (s *AgentServer) OnNewSession(ctx context.Context, req openacp.NewSessionRe
 			AvailableCommands: s.availableCommands(),
 		})
 		s.updateSender.SendSessionUpdate(id, openacp.SessionUpdate{
-			SessionUpdate:  "available_skills_update",
+			SessionUpdate:   "available_skills_update",
 			AvailableSkills: s.availableSkills(ss),
 		})
 	}
@@ -1093,7 +1139,7 @@ func (s *AgentServer) OnLoadSession(ctx context.Context, req openacp.LoadSession
 			AvailableCommands: s.availableCommands(),
 		})
 		s.updateSender.SendSessionUpdate(req.SessionID, openacp.SessionUpdate{
-			SessionUpdate:  "available_skills_update",
+			SessionUpdate:   "available_skills_update",
 			AvailableSkills: s.availableSkills(ss),
 		})
 	}
@@ -1142,6 +1188,14 @@ func (s *AgentServer) replayHistory(ctx context.Context, sid openacp.SessionId, 
 		}
 		switch msg.Role {
 		case openagent.RoleUser:
+			// Skip <system-reminder> messages on replay — they are injected
+			// environment events (sub-agent completion notifications), not
+			// user speech. Rendering them as user_message_chunk would show
+			// raw <system-reminder> XML in the chat history on session load.
+			trimmed := strings.TrimSpace(msg.Content)
+			if strings.HasPrefix(trimmed, "<system-reminder>") && strings.HasSuffix(trimmed, "</system-reminder>") {
+				continue
+			}
 			sender.SendHistoryMessageWithMeta("user_message_chunk", msg.Content, mid, meta)
 
 		case openagent.RoleAssistant:
@@ -1256,6 +1310,7 @@ func (s *AgentServer) OnCloseSession(ctx context.Context, req openacp.CloseSessi
 	ss := s.getSession(req.SessionID)
 	if ss != nil {
 		s.disconnectMCP(ss.mcpSessions)
+		s.killSubAgents(ss)
 	}
 	s.removeSession(req.SessionID)
 	return &openacp.CloseSessionResponse{}, nil
@@ -1265,6 +1320,7 @@ func (s *AgentServer) OnDeleteSession(ctx context.Context, req openacp.DeleteSes
 	ss := s.getSession(req.SessionID)
 	if ss != nil {
 		s.disconnectMCP(ss.mcpSessions)
+		s.killSubAgents(ss)
 		if ss.processMgr != nil {
 			ss.processMgr.Cleanup()
 		}
@@ -2011,6 +2067,16 @@ func (s *AgentServer) buildRuntimeForSession(sid openacp.SessionId, ss *agentSes
 			}
 		}
 		ss.setSubAgentTools(cached)
+		// Wire async sub-agent completion: when a background sub-agent
+		// finishes, trigger an idle turn via the SDK mux's TriggerTurn
+		// (fully serialized with user turns via sessionLocks). The note
+		// becomes the prompt input so the model processes the result
+		// immediately, not "whenever the user comes back".
+		if reg := rt.SubAgentRegistry(); reg != nil {
+			reg.SetOnExit(func(note string) {
+				s.triggerIdleTurn(sid, note)
+			})
+		}
 	}
 
 	// Initial mode tool set + approver.
@@ -2106,11 +2172,17 @@ func toolNames(tools []openagent.Tool) []string {
 }
 
 // subAgentToolNames returns the delegation tool names for a config's
-// sub-agents (registered as tools by kernel.New).
+// sub-agents (registered as tools by kernel.New), plus "sub_agent_send" when
+// delegation tools exist — the follow-up tool is registered alongside them
+// (kernel.New) and must be cached/dropped/re-injected in lockstep with them
+// across plan-mode transitions (applyModeTools).
 func subAgentToolNames(cfg *agent.Agent) []string {
 	var names []string
 	for _, sa := range cfg.SubAgents {
 		names = append(names, sa.Name)
+	}
+	if len(cfg.SubAgents) > 0 {
+		names = append(names, "sub_agent_send")
 	}
 	return names
 }

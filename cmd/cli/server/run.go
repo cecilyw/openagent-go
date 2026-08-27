@@ -88,7 +88,11 @@ func RunCLI(ctx context.Context, cfg *config.Config, message string) error {
 		deps.Extractor = ctxpkg.NewAsyncExtractor(ctxpkg.NewLLMExtractor(m, knowledge))
 	}
 	if caps.OnMemory() && caps.OnSummarizer() && m != nil {
-		ms.WithSummarizer(summarizer.New(m).WithMaxTokens(agentCfg.MaxCompressedTokens))
+		sumz := summarizer.New(m).WithMaxTokens(agentCfg.MaxCompressedTokens)
+		ms.WithSummarizer(sumz)
+		// Share the summarizer with sub-agent children so their in-memory
+		// stores get compaction parity with the parent.
+		deps.Summarizer = sumz
 	}
 
 	// 6. Fresh session per run (no cross-run conversation history, but

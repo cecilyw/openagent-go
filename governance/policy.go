@@ -314,6 +314,12 @@ func NewToolClassifier() *ToolClassifier {
 		// Office read-only tools: word_read/excel_read/pptx_read only read.
 		// write/template_fill create files and stay Dangerous (require approval).
 		"word_read": true, "excel_read": true, "pptx_read": true,
+		// Sub-agent delegation: the delegation tool itself is a read-only
+		// dispatch (no side effect beyond what the child's own gated tools
+		// do). The child inherits the parent's policy/approver, so its tool
+		// calls are individually gated. sub_agent_send continues the same
+		// child under the same gating.
+		"sub_agent_send": true,
 	}}
 }
 

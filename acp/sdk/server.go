@@ -111,6 +111,9 @@ func (s *Server) RunTransport(ctx context.Context, w io.Writer, r io.Reader) err
 	if u, ok := s.handler.(ClientRPCUser); ok {
 		u.SetClientRequester(mux)
 	}
+	if u, ok := s.handler.(TurnTriggerUser); ok {
+		u.SetTurnTrigger(mux.triggerTurn)
+	}
 	go mux.writerLoop()
 	return mux.serve(ctx, r)
 }
@@ -527,6 +530,32 @@ func (m *mux) handlePrompt(msg jsonrpcMessage) {
 		return
 	}
 	m.writeResult(msg.ID, resp)
+}
+
+// triggerTurn starts a turn on a session without a client prompt — used by
+// the handler to process async completions (e.g. sub-agent results) while
+// the user is idle. It acquires the same per-session lock as handlePrompt,
+// so the triggered turn is fully serialized with user turns: no two turns
+// ever run concurrently on the same session. The sender is the same
+// promptSender type, so all session/update notifications reach the client.
+// Unlike handlePrompt there is no JSON-RPC response — the turn's output
+// reaches the client via the sender's notifications (agent_message_chunk,
+// tool_call_update, etc.).
+func (m *mux) triggerTurn(sid SessionId, text string) {
+	muI, _ := m.sessionLocks.LoadOrStore(sid, &sync.Mutex{})
+	mu := muI.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := PromptRequest{
+		SessionID: sid,
+		Prompt:    []ContentBlock{{Type: "text", Text: text}},
+	}
+	sender := &promptSender{m: m, sid: sid}
+	_, _ = m.handler.OnPrompt(ctx, req, sender)
 }
 
 func (m *mux) handleCancel(msg jsonrpcMessage) {

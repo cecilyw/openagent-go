@@ -61,3 +61,10 @@ func WithMaxCompressedTokens(n int) Option {
 func WithReasoningEffort(effort string) Option {
 	return func(a *Agent) { a.ReasoningEffort = effort }
 }
+
+// WithSubAgents sets the pre-configured sub-agents (delegation targets).
+// Each becomes a tool the model can call with a task, running in an
+// isolated context with its own system prompt and tool scope.
+func WithSubAgents(sas ...SubAgent) Option {
+	return func(a *Agent) { a.SubAgents = sas }
+}
