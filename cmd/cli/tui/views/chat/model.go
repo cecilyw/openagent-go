@@ -79,6 +79,13 @@ type Model struct {
 	acpSession *openacp.Session
 	program    *tea.Program
 
+	// permission dialog: when non-nil, a tool call is awaiting approval.
+	// The user's selection is sent back via permissionReplyCh.
+	permissionReq        *openacp.RequestPermissionRequest
+	permissionReplyCh    chan openacp.RequestPermissionResponse
+	permissionSelectedIdx int
+	permissionOptionY     []int // Y coordinates of each option row (terminal-relative)
+
 	chatViewport viewport.Model
 	chatTextarea textarea.Model
 
@@ -123,7 +130,7 @@ func NewModel(ctx context.Context, cancel context.CancelFunc, workDir, ver, mode
 	vp.SetWidth(layout.GetViewWidth(defaultWidth))
 	vp.SetHeight(layout.GetViewHeight(defaultHeight))
 	vp.FillHeight = true
-	vp.Style = theme.BaseStyle().Padding(0, 1)
+	vp.Style = theme.BaseStyle()
 
 	// textarea (input)
 	ta := textarea.New()
@@ -216,6 +223,10 @@ type agentMessageMsg struct{ text string }
 type agentThoughtMsg struct{ text string }
 type promptDoneMsg struct{}
 type acpErrorMsg struct{ err error }
+type permissionRequestMsg struct {
+	req     openacp.RequestPermissionRequest
+	replyCh chan openacp.RequestPermissionResponse
+}
 
 // Exported constructors for app.go to send these msgs from the ACP goroutine.
 func AcpReadyMsg(sessionID string) tea.Msg { return acpReadyMsg{sessionID: sessionID} }
@@ -256,7 +267,38 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case permissionRequestMsg:
+		m.permissionReq = &msg.req
+		m.permissionReplyCh = msg.replyCh
+		return m, nil
+
 	case tea.KeyMsg:
+		// If permission dialog is open, intercept keys for selection.
+		if m.permissionReq != nil {
+			if k, ok := msg.(tea.KeyPressMsg); ok {
+				switch k.String() {
+				case "ctrl+c":
+					return m, tea.Quit
+				case "esc":
+					m.respondPermission(-1)
+					return m, nil
+				case "up":
+					if m.permissionSelectedIdx > 0 {
+						m.permissionSelectedIdx--
+					}
+					return m, nil
+				case "down":
+					if m.permissionReq != nil && m.permissionSelectedIdx < len(m.permissionReq.Options)-1 {
+						m.permissionSelectedIdx++
+					}
+					return m, nil
+				case "enter":
+					m.respondPermission(m.permissionSelectedIdx)
+					return m, nil
+				}
+			}
+			return m, nil
+		}
 		if k, ok := msg.(tea.KeyPressMsg); ok {
 			switch k.String() {
 			case "ctrl+c", "esc":
@@ -299,6 +341,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.MouseClickMsg:
+		// Click on a permission option to select it.
+		if m.permissionReq != nil && msg.Button == tea.MouseLeft {
+			idx := m.permissionOptionAt(msg.Y)
+			if idx >= 0 {
+				m.respondPermission(idx)
+			}
+			return m, nil
+		}
+
 	// ── ACP streaming events ──
 	case acpReadyMsg:
 		m.activeSessionID = msg.sessionID
@@ -338,6 +390,43 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, blinkTick()
 	}
 	return m, nil
+}
+
+// permissionOptionAt returns the option index for a terminal Y coordinate,
+// or -1 if the click is not on an option row. Uses permissionOptionY which
+// is populated during renderPermissionPanel.
+func (m *Model) permissionOptionAt(y int) int {
+	for i, oy := range m.permissionOptionY {
+		if oy == y {
+			return i
+		}
+	}
+	return -1
+}
+
+// respondPermission sends the user's selection back to the ACP server via
+// the reply channel. idx >= 0 selects option[idx]; idx < 0 cancels.
+func (m *Model) respondPermission(idx int) {
+	if m.permissionReq == nil || m.permissionReplyCh == nil {
+		return
+	}
+	var resp openacp.RequestPermissionResponse
+	if idx >= 0 && idx < len(m.permissionReq.Options) {
+		optID := openacp.PermissionOptionId(m.permissionReq.Options[idx].OptionID)
+		resp = openacp.RequestPermissionResponse{
+			Outcome: openacp.RequestPermissionOutcome{
+				Outcome:  "selected",
+				OptionID: &optID,
+			},
+		}
+	} else {
+		resp = openacp.RequestPermissionResponse{
+			Outcome: openacp.RequestPermissionOutcome{Outcome: "cancelled"},
+		}
+	}
+	m.permissionReplyCh <- resp
+	m.permissionReq = nil
+	m.permissionReplyCh = nil
 }
 
 func (m *Model) updateWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {

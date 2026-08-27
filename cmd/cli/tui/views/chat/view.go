@@ -52,6 +52,44 @@ func (m *Model) renderMainView() string {
 func (m *Model) renderLeft() string {
 	leftW := layout.GetLeftWidth(m.width)
 	vpH := layout.GetViewHeight(m.height)
+
+	// When permission dialog is open, shrink the viewport to make room for
+	// the permission panel (bottom-aligned, above status bar).
+	var inputArea string
+	if m.permissionReq != nil {
+		// Render panel first to know its actual height, then size viewport
+		// so transcript + panel + status fits exactly in the terminal.
+		inputArea = m.renderPermissionPanel(m.getContentWidth()-1, 0)
+		panelH := lipgloss.Height(inputArea)
+		// Normal layout: vpH + 1(blank) + inputH + statusH = height.
+		// Permission: vpHeight + panelH + statusH = height - 1(SpaceHeight).
+		statusH := layout.StatusHeight
+		vpHeight := m.height - 1 - panelH - statusH // -1 for SpaceHeight
+		if vpHeight < 3 {
+			vpHeight = 3
+		}
+		m.chatViewport.SetHeight(vpHeight)
+		if m.viewportDirty {
+			m.chatViewport.SetContent(m.renderMessages())
+			m.chatViewport.GotoBottom()
+			m.viewportDirty = false
+		}
+		sb := m.renderScrollbar(vpHeight)
+		scrollContainer := lipgloss.JoinHorizontal(lipgloss.Top, m.chatViewport.View(), sb)
+		// Option Y positions: panel starts at vpHeight, header(1) + blank(1) = offset 2.
+		panelY := vpHeight
+		m.permissionOptionY = m.permissionOptionY[:0]
+		for i := range m.permissionReq.Options {
+			m.permissionOptionY = append(m.permissionOptionY, panelY+2+i*2)
+		}
+		status := m.renderStatus()
+		return lipgloss.NewStyle().Width(leftW).Padding(0, 1).Render(
+			lipgloss.JoinVertical(lipgloss.Left, scrollContainer, inputArea, status),
+		)
+	}
+
+	// Normal: full-height viewport + input + status.
+	m.chatViewport.SetHeight(vpH)
 	if m.viewportDirty {
 		m.chatViewport.SetContent(m.renderMessages())
 		m.chatViewport.GotoBottom()
@@ -59,10 +97,10 @@ func (m *Model) renderLeft() string {
 	}
 	sb := m.renderScrollbar(vpH)
 	scrollContainer := lipgloss.JoinHorizontal(lipgloss.Top, m.chatViewport.View(), sb)
-	input := m.renderInput()
+	inputArea = m.renderInput()
 	status := m.renderStatus()
 	return lipgloss.NewStyle().Width(leftW).Padding(0, 1).Render(
-		lipgloss.JoinVertical(lipgloss.Left, scrollContainer, "", input, status),
+		lipgloss.JoinVertical(lipgloss.Left, scrollContainer, "", inputArea, status),
 	)
 }
 
@@ -85,7 +123,7 @@ func createHalf(width int, borderColor color.Color) string {
 }
 
 func (m *Model) renderInput() string {
-	contentWidth := m.getContentWidth()
+	contentWidth := m.getContentWidth() - 1 // -1 for ThickBorder right edge
 	borderColor := theme.BorderGray
 	isFocused := m.chatTextarea.Focused()
 	if isFocused {
@@ -229,4 +267,68 @@ func (m *Model) renderScrollbar(height int) string {
 		}
 	}
 	return doc.String()
+}
+
+// renderPermissionPanel renders an inline panel (replacing the input area)
+// showing the tool call that needs approval. Bottom-aligned above status.
+func (m *Model) renderPermissionPanel(width, _ int) string {
+	req := m.permissionReq
+	tc := req.ToolCall
+	title := tc.Title
+	if title == "" {
+		title = "Tool Call"
+	}
+
+	contentW := width
+	contentStyle := theme.BaseStyle().Width(contentW).Background(theme.BgSurface)
+	yellow := lipgloss.Color("#ffd60a")
+	warnStyle := theme.BaseStyle().Background(theme.BgSurface).Foreground(yellow)
+
+	icon := warnStyle.Render("⚠")
+	allow := warnStyle.Bold(true).Render("allow")
+	space := warnStyle.Render(" ")
+	toolName := warnStyle.Render(title)
+	question := warnStyle.Render("?")
+	headerTitle := contentStyle.Render(lipgloss.JoinHorizontal(lipgloss.Left, icon, space, allow, space, toolName, question))
+
+	// Options: one per line, full width, separator line between them.
+	// Selected option uses Primary foreground + "▶" marker.
+	sep := contentStyle.Foreground(theme.BorderGray).Render(strings.Repeat("─", contentW-1))
+	optionParts := make([]string, 0, len(req.Options)*2)
+	for i, opt := range req.Options {
+		name := opt.Name
+		if name == "" {
+			name = string(opt.OptionID)
+		}
+		marker := "  "
+		optStyle := contentStyle.Foreground(theme.TextAsh)
+		if i == m.permissionSelectedIdx {
+			marker = "▶ "
+			optStyle = contentStyle.Foreground(theme.Primary)
+		}
+		optionParts = append(optionParts, optStyle.Render(marker+name))
+		if i < len(req.Options)-1 {
+			optionParts = append(optionParts, sep)
+		}
+	}
+	optionList := lipgloss.JoinVertical(lipgloss.Left, optionParts...)
+
+	footer := contentStyle.PaddingRight(1).Align(lipgloss.Right).Render(
+		lipgloss.JoinHorizontal(lipgloss.Right,
+			components.RenderCommandTipSurface("↑ ↓", "switch"),
+			components.RenderCommandTipSurface("esc", "cancel"),
+			components.RenderCommandTipSurface("enter", "select"),
+		),
+	)
+
+	content := lipgloss.JoinVertical(lipgloss.Left, headerTitle, "", optionList, "", footer)
+
+	borderColor := theme.Warning
+	return theme.BaseStyle().
+		Width(width).
+		Background(theme.BgSurface).
+		Border(lipgloss.ThickBorder(), false, false, false, true).
+		BorderBackground(theme.BgNormal).
+		BorderForeground(borderColor).
+		Render(content)
 }

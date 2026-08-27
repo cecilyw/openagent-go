@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	tea "charm.land/bubbletea/v2"
@@ -33,10 +32,6 @@ func StartInteractiveTUI(ctx context.Context, cfg config.Config) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	if err := os.Setenv("TERM", "xterm-256color"); err != nil {
-		fmt.Println("set TERM failed")
-	}
 
 	workDir, _ := os.Getwd()
 
@@ -95,7 +90,9 @@ func startACPInProcess(ctx context.Context, model *chat.Model, p *tea.Program, c
 		return
 	}
 
-	sess.SetEventHandler(chat.NewAcpEventHandler(p))
+	handler := chat.NewAcpEventHandler(p)
+	sess.SetEventHandler(handler)
+	sess.SetClientRequestHandler(handler)
 	model.SetACPSession(sess)
 	p.Send(chat.AcpReadyMsg(string(resp.SessionID)))
 }
