@@ -1722,6 +1722,8 @@ func (s *AgentServer) OnPrompt(ctx context.Context, req openacp.PromptRequest, s
 		// Async LLM title generation — don't block the turn for it.
 		if m := s.resolveSessionModel(ss); m != nil {
 			go s.generateTitle(req.SessionID, m, input.Content, fallback)
+		} else {
+			slog.Warn("title generation skipped: no model resolved", "session", req.SessionID)
 		}
 	}
 
@@ -2008,6 +2010,7 @@ func (s *AgentServer) generateTitle(sid openacp.SessionId, model openagent.Model
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
+	slog.Info("title generation started", "session", sid, "fallback", fallback)
 	resp, err := model.ChatCompletion(ctx, openagent.ChatCompletionRequest{
 		Messages: []openagent.Message{
 			{Role: openagent.RoleSystem, Content: "The user has started a new conversation. The message below is the first thing they said. " +
@@ -2016,21 +2019,27 @@ func (s *AgentServer) generateTitle(sid openacp.SessionId, model openagent.Model
 				"Output ONLY the title — no quotes, no explanation, no punctuation at the end."},
 			{Role: openagent.RoleUser, Content: userMessage},
 		},
-		MaxTokens: 50,
 	})
 	if err != nil {
-		slog.Debug("title generation failed", "session", sid, "error", err)
+		slog.Warn("title generation failed", "session", sid, "error", err)
 		return
 	}
-	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+	if len(resp.Choices) == 0 {
+		slog.Warn("title generation no choices", "session", sid, "usage", resp.Usage)
 		return
 	}
-	title := strings.TrimSpace(resp.Choices[0].Message.Content)
+	content := resp.Choices[0].Message.Content
+	if content == "" {
+		slog.Warn("title generation empty content", "session", sid, "finish_reason", resp.Choices[0].FinishReason, "usage", resp.Usage)
+		return
+	}
+	title := strings.TrimSpace(content)
 	// Strip quotes if the model wrapped the title in them.
 	title = strings.Trim(title, `"'`)
 	if title == "" || title == fallback {
 		return
 	}
+	slog.Info("title generation success", "session", sid, "title", title)
 
 	// Update the persisted title and notify subscribers.
 	updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
