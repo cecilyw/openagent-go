@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as solidIcons from '@fortawesome/free-solid-svg-icons';
-import PptxGenJS from 'pptxgenjs';
+import PptxGenJS from 'pptxgenjs-plus';
 
 function text(value) {
   if (value === undefined || value === null) {

@@ -1,6 +1,6 @@
 ---
 name: powerpoint
-description: Create designed, editable PowerPoint .pptx presentations with PptxGenJS. Use when the user asks to create, generate, update, or inspect a deck, slide deck, presentation, or .pptx file.
+description: Create designed, editable PowerPoint .pptx presentations with PptxGenJS-Plus. Use when the user asks to create, generate, update, or inspect a deck, slide deck, presentation, or .pptx file.
 ---
 
 # PowerPoint
@@ -96,7 +96,16 @@ export default async function build(pptx, ctx) {
 }
 ```
 
-Useful layouts: `LAYOUT_WIDE` (13.333 x 7.5 in), `LAYOUT_16X9` (10 x 5.625 in), `LAYOUT_4X3` (10 x 7.5 in). Use inches for all `x`, `y`, `w`, `h` values.
+Useful layouts: `LAYOUT_WIDE` (13.333 x 7.5 in), `LAYOUT_16X9` (10 x 5.625 in), `LAYOUT_4X3` (10 x 7.5 in). Dimensions accept inches (plain numbers) or unit-suffixed strings:
+
+```javascript
+// inches (default — plain number)
+slide.addText("Title", { x: 0.6, y: 0.4, w: 8, h: 0.6, fontSize: 36 });
+
+// centimeters / millimeters / points
+slide.addText("Title", { x: "1.5cm", y: "1cm", w: "20cm", h: "1.5cm", fontSize: 36 });
+slide.addShape(pptx.ShapeType.rect, { x: "0mm", y: "0mm", w: "338mm", h: "190mm" });
+```
 
 ### Text
 
@@ -132,6 +141,9 @@ slide.addShape(pptx.ShapeType.roundRect, {
 
 - Hex colors must not include `#`. Do not use 8-character hex for transparency — use `transparency` or `opacity`.
 - Use a fresh options object for each shape; PptxGenJS mutates some option values internally.
+- Preset shadows: `shadow: { type: "preset", preset: "shdw1" }` (shdw1–shdw20).
+- Picture fills on shapes: `fill: { type: "image", image: { data: ctx.imageData("bg.png"), sizing: { type: "cover" } } }`.
+- Connectors: `slide.addConnector({ x: 0.7, y: 6.8, w: 11.8, h: 0, line: { color: "CBD5E1", width: 1 } })`.
 
 ### Images and Icons
 
@@ -157,6 +169,17 @@ slide.addChart(pptx.ChartType.bar, [{ name: "Revenue", labels: ["Q1","Q2","Q3","
   x: 0.7, y: 1.2, w: 6.2, h: 3.8, barDir: "col", chartColors: ["2563EB"], showValue: true,
 });
 ```
+
+ChartEx types (PowerPoint 2016+): `pptx.ChartExType.funnel`, `treemap`, `sunburst`, `waterfall`, `histogram`, `boxWhisker`:
+
+```javascript
+slide.addChart(pptx.ChartExType.funnel, [{ name: "Pipeline", labels: ["Leads","Qualified","Demo","Close"], values: [1000,400,120,30] }], {
+  x: 0.7, y: 1.2, w: 6.2, h: 3.8, chartColors: ["2563EB","3B82F6","60A5FA","93C5FD"],
+});
+```
+
+- Table diagonal borders: `borderDiagonalDown: { color: "E5E7EB", pt: 1 }`.
+- Text fields for page numbers: `slide.addText({ text: "1", options: { field: "slidenum" } })`.
 
 ### Layout Ideas
 
