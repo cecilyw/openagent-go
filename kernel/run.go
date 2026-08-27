@@ -447,15 +447,20 @@ func (rt *Runtime) emitCompactionResult(ctx context.Context, ch chan<- openagent
 	if ci.err != nil {
 		slog.Error(slogMsg, "error", ci.err)
 		chSend(ctx, ch, openagent.StreamEvent{
-			Type: openagent.StreamThought,
-			Text: fmt.Sprintf("context compaction failed: %v (degraded — older messages dropped from prompt)\n", ci.err),
+			Type: openagent.StreamCompacted,
+			Compaction: &openagent.CompactionInfo{
+				Error: ci.err.Error(),
+			},
 		})
 		return
 	}
 	if ci.count > 0 {
 		chSend(ctx, ch, openagent.StreamEvent{
-			Type: openagent.StreamThought,
-			Text: fmt.Sprintf("Compacted %d messages → summary (freed ~%d tokens)\n", ci.count, ci.freedTokens),
+			Type: openagent.StreamCompacted,
+			Compaction: &openagent.CompactionInfo{
+				CompressedMessages: ci.count,
+				FreedTokens:        ci.freedTokens,
+			},
 		})
 	}
 }

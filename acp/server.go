@@ -1850,6 +1850,31 @@ func (s *AgentServer) OnPrompt(ctx context.Context, req openacp.PromptRequest, s
 			}
 			sender.SendAvailableSkills(skills)
 
+		case openagent.StreamCompacting:
+			// "context_compacting" — compaction started, client shows a status.
+			if evt.Compaction != nil && s.updateSender != nil {
+				s.updateSender.SendSessionUpdate(req.SessionID, openacp.SessionUpdate{
+					SessionUpdate: "context_compacting",
+					Meta: map[string]any{
+						"overflow_tokens": evt.Compaction.OverflowTokens,
+						"total_messages":  evt.Compaction.TotalMessages,
+					},
+				})
+			}
+
+		case openagent.StreamCompacted:
+			// "context_compacted" — compaction finished, client updates usage.
+			if evt.Compaction != nil && s.updateSender != nil {
+				s.updateSender.SendSessionUpdate(req.SessionID, openacp.SessionUpdate{
+					SessionUpdate: "context_compacted",
+					Meta: map[string]any{
+						"compressed_messages": evt.Compaction.CompressedMessages,
+						"freed_tokens":        evt.Compaction.FreedTokens,
+						"error":               evt.Compaction.Error,
+					},
+				})
+			}
+
 		case openagent.StreamDone:
 			if evt.Result != nil {
 				usage = evt.Result.Usage

@@ -166,8 +166,11 @@ func (rt *Runtime) prepareMemory(ctx context.Context, session openagent.Session,
 			// no explanation. The follow-up ("compacted N tokens" /
 			// "failed") is emitted by run() after this returns.
 			chSend(ctx, ch, openagent.StreamEvent{
-				Type: openagent.StreamThought,
-				Text: "context compacting...\n",
+				Type: openagent.StreamCompacting,
+				Compaction: &openagent.CompactionInfo{
+					OverflowTokens: overflow,
+					TotalMessages:  len(msgs),
+				},
 			})
 			ci.attempted = true
 			openagent.ObserveDecision(ctx, rt.deps.Observer, openagent.DecisionEvent{
