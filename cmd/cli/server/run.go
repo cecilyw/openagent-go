@@ -64,7 +64,7 @@ func RunCLI(ctx context.Context, cfg *config.Config, message string) error {
 	opts := []agent.Option{
 		agent.WithModel(m),
 		agent.WithSystemPrompts(prompts...),
-		agent.WithMaxTurns(50),
+		agent.WithMaxTurns(500),
 	}
 	opts, skillProvider := buildOpts(opts, caps, m)
 	agentCfg := agent.New(version.Name, opts...)

@@ -80,7 +80,7 @@ func BuildACPServer(ctx context.Context, cfg *config.Config) (*openacpsdk.Server
 	// kernel.Deps.
 	opts := []agent.Option{
 		agent.WithSystemPrompts(resolveProfiles("")...),
-		agent.WithMaxTurns(100),
+		agent.WithMaxTurns(500),
 	}
 	opts, skillProvider := buildOpts(opts, caps, firstM)
 	agentCfg := agent.New(version.Name, opts...)

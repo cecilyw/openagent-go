@@ -68,7 +68,7 @@ func RunREST(ctx context.Context, cfg *config.Config) error {
 	opts := []agent.Option{
 		agent.WithModel(m),
 		agent.WithSystemPrompts(resolveProfiles("")...),
-		agent.WithMaxTurns(100),
+		agent.WithMaxTurns(500),
 	}
 	opts, skillProvider := buildOpts(opts, caps, m)
 	agentCfg := agent.New(version.Name, opts...)

@@ -38,7 +38,7 @@ type Agent struct {
 	OutGuard governance.OutputGuard   // nil = no output guard
 
 	// Configuration
-	MaxTurns            int // max loop iterations, 0 = default (20)
+	MaxTurns            int // max loop iterations, 0 = default (500)
 	MaxWorkingTokens    int // max tokens for working set before compaction; 0 = 70% of model context window
 	MaxCompressedTokens int // max tokens for compressed summary, 0 = no limit (default 8192)
 
@@ -80,7 +80,7 @@ type SubAgent struct {
 func New(name string, opts ...Option) *Agent {
 	a := &Agent{
 		Name:                name,
-		MaxTurns:            20,
+		MaxTurns:            500,
 		MaxCompressedTokens: 8192,
 	}
 	for _, opt := range opts {
