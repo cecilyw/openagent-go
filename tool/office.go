@@ -2,34 +2,9 @@ package tool
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	openagent "github.com/yusheng-g/openagent-go"
 )
-
-// resolveOutputPath returns path unchanged if it is absolute. For relative
-// paths it resolves them against the user's Documents folder so files created
-// by the AI land in a predictable, user-visible location rather than the
-// server's working directory.
-//
-// Resolution order:
-//  1. XDG_DOCUMENTS_DIR environment variable (Linux / freedesktop standard)
-//  2. ~/Documents as a cross-platform fallback (Windows, macOS, Linux)
-//
-// Mirrors the reference implementation's ResolveOutputPath.
-func resolveOutputPath(path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	if xdgDocs := os.Getenv("XDG_DOCUMENTS_DIR"); xdgDocs != "" {
-		return filepath.Join(xdgDocs, path)
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, "Documents", path)
-	}
-	return path
-}
 
 // officeToolText wraps a success string into a ToolResult.
 func officeToolText(text string) *openagent.ToolResult {
@@ -42,16 +17,18 @@ func officeToolError(toolName, text string) *openagent.ToolResult {
 }
 
 // NewOfficeTools returns the office tools (Word + Excel + PPT). workDir is
-// the workspace root used by read tools for relative-path resolution.
+// the workspace root used for relative-path resolution by all read and write
+// tools — relative output paths land in the workspace, not ~/Documents, so
+// the agent can read back what it just wrote.
 func NewOfficeTools(workDir string) []openagent.Tool {
 	return []openagent.Tool{
 		&wordReadTool{workDir: workDir},
-		&wordWriteTool{},
+		&wordWriteTool{workDir: workDir},
 		&excelReadTool{workDir: workDir},
-		&excelWriteTool{},
+		&excelWriteTool{workDir: workDir},
 		&pptxReadTool{workDir: workDir},
-		&pptxWriteTool{},
+		&pptxWriteTool{workDir: workDir},
 		&pptxTemplateAnalyzeTool{},
-		&pptxTemplateFillTool{},
+		&pptxTemplateFillTool{workDir: workDir},
 	}
 }

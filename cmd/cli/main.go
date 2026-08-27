@@ -244,6 +244,12 @@ var rootCmd = &cobra.Command{
 	Short: "openagent CLI",
 }
 
+func init() {
+	// --cwd is a persistent flag so every subcommand (serve, run, tui)
+	// inherits it. When empty, os.Getwd() is used (backward compatible).
+	rootCmd.PersistentFlags().String("cwd", "", "Working directory (default: process cwd)")
+}
+
 // ── tui ──
 
 func buildTuiCmd(cfg config.Config) *cobra.Command {
@@ -252,6 +258,11 @@ func buildTuiCmd(cfg config.Config) *cobra.Command {
 		Short:        "Start the interactive TUI",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cwd, _ := cmd.Flags().GetString("cwd"); cwd != "" {
+				if err := os.Chdir(cwd); err != nil {
+					return fmt.Errorf("--cwd: %w", err)
+				}
+			}
 			// Configure logging the same way serve/run do, so TUI logs
 			// land in the file (never stderr — would corrupt alt-screen).
 			logCleanup, err := server.SetupLog(cfg.Log)
@@ -284,6 +295,14 @@ func buildServeCmd(cfg config.Config) *cobra.Command {
 			// fence is the 512 MiB linear-memory cap in the plugin
 			// loaders; this bounds the rest of the process.
 			debug.SetMemoryLimit(512 << 20)
+			// --cwd: chdir before anything else so all os.Getwd() calls
+			// (tools, skills, profiles, sandbox) resolve to the right
+			// directory. Empty = keep process cwd (backward compatible).
+			if cwd, _ := cmd.Flags().GetString("cwd"); cwd != "" {
+				if err := os.Chdir(cwd); err != nil {
+					return fmt.Errorf("--cwd: %w", err)
+				}
+			}
 			parseCapabilities(cmd, &caps)
 			isACP, _ := cmd.Flags().GetBool("acp")
 			channelFlag, _ := cmd.Flags().GetString("channel")
@@ -396,6 +415,11 @@ Wrap your message in quotes when it contains spaces:
   %s run "analyze cmd/cli/main.go and summarize"`, version.Name, version.Name),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cwd, _ := cmd.Flags().GetString("cwd"); cwd != "" {
+				if err := os.Chdir(cwd); err != nil {
+					return fmt.Errorf("--cwd: %w", err)
+				}
+			}
 			return server.RunCLI(cmd.Context(), &cfg, args[0])
 		},
 	}

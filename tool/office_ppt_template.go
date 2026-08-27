@@ -73,11 +73,13 @@ func (t *pptxTemplateAnalyzeTool) Execute(ctx context.Context, args json.RawMess
 // pptxTemplateFillTool creates a new .pptx by deterministically filling and
 // reusing slides from an existing template, per a fill plan built from
 // pptx_template_analyze output.
-type pptxTemplateFillTool struct{}
+type pptxTemplateFillTool struct {
+	workDir string
+}
 
 type pptxTemplateFillParams struct {
 	Template           string          `json:"template" jsonschema:"description=Local .pptx path or HTTP(S) URL to the template"`
-	Path               string          `json:"path" jsonschema:"description=Output .pptx path; relative paths resolve to the Documents folder"`
+	Path               string          `json:"path" jsonschema:"description=Output .pptx path; relative paths resolve to the workspace directory"`
 	Plan               json.RawMessage `json:"plan" jsonschema:"description=A template_fill_pptx_plan.v1 plan built from pptx_template_analyze output"`
 	Transition         string          `json:"transition,omitempty" jsonschema:"description=Default slide transition; use keep to preserve the source"`
 	TransitionDuration float64         `json:"transition_duration,omitempty" jsonschema:"description=Default transition duration in seconds when setting a transition"`
@@ -145,7 +147,10 @@ func (t *pptxTemplateFillTool) Execute(ctx context.Context, args json.RawMessage
 	}
 	defer cleanupImages()
 
-	outputPath = resolveOutputPath(outputPath)
+	outputPath, err = ValidatePath(t.workDir, outputPath)
+	if err != nil {
+		return openagent.ErrorResult(fmt.Errorf("pptx_template_fill: %w", err), false, "")
+	}
 	library, err := office.AnalyzeFile(templatePath, ooxml.DefaultLimits())
 	if err != nil {
 		return officeToolError("pptx_template_fill", fmt.Sprintf("failed to analyze template: %s", err.Error()))

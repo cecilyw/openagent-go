@@ -26,10 +26,12 @@ var pptxWorkerBundleFS embed.FS
 //
 // If Node.js is absent, the tool returns a clear error so the model can
 // install Node via the shell tool and retry.
-type pptxWriteTool struct{}
+type pptxWriteTool struct {
+	workDir string
+}
 
 type pptxWriteParams struct {
-	Path      string          `json:"path" jsonschema:"description=Output path for the .pptx file. Relative paths resolve to the Documents folder."`
+	Path      string          `json:"path" jsonschema:"description=Output path for the .pptx file. Relative paths resolve to the workspace directory."`
 	Script    string          `json:"script" jsonschema:"description=JavaScript module exporting default async function build(pptx, ctx) or a named build function. The script adds slides to the PptxGenJS instance."`
 	Data      json.RawMessage `json:"data,omitempty" jsonschema:"description=Optional JSON value passed to ctx.data inside the script"`
 	AssetsDir string          `json:"assets_dir,omitempty" jsonschema:"description=Optional base directory for ctx.resolveAsset() and ctx.imageData() calls"`
@@ -83,7 +85,10 @@ func (t *pptxWriteTool) Execute(ctx context.Context, args json.RawMessage) *open
 		}
 	}
 
-	outputPath := resolveOutputPath(strings.TrimSpace(p.Path))
+	outputPath, err := ValidatePath(t.workDir, strings.TrimSpace(p.Path))
+	if err != nil {
+		return openagent.ErrorResult(fmt.Errorf("pptx_write: %w", err), false, "")
+	}
 
 	// Write the LLM-generated build script to a temp .mjs file.
 	scriptFile, err := os.CreateTemp("", "openagent-pptx-build-*.mjs")

@@ -60,10 +60,12 @@ func (t *wordReadTool) Execute(ctx context.Context, args json.RawMessage) *opena
 
 // ── word_write ──
 
-type wordWriteTool struct{}
+type wordWriteTool struct {
+	workDir string
+}
 
 type wordWriteParams struct {
-	Path    string `json:"path" jsonschema:"description=Output path for the .docx file. Relative paths resolve to the Documents folder."`
+	Path    string `json:"path" jsonschema:"description=Output path for the .docx file. Relative paths resolve to the workspace directory."`
 	Content string `json:"content" jsonschema:"description=Text content to write. Newlines become paragraph breaks."`
 }
 
@@ -86,7 +88,10 @@ func (t *wordWriteTool) Execute(ctx context.Context, args json.RawMessage) *open
 		return officeToolError("word_write", "missing required parameter: path")
 	}
 
-	outputPath := resolveOutputPath(strings.TrimSpace(p.Path))
+	outputPath, err := ValidatePath(t.workDir, strings.TrimSpace(p.Path))
+	if err != nil {
+		return openagent.ErrorResult(fmt.Errorf("word_write: %w", err), false, "")
+	}
 	if err := writeWordFile(outputPath, p.Content); err != nil {
 		return officeToolError("word_write", fmt.Sprintf("failed to write Word file: %s", err.Error()))
 	}

@@ -60,10 +60,12 @@ func (t *excelReadTool) Execute(ctx context.Context, args json.RawMessage) *open
 
 // ── excel_write ──
 
-type excelWriteTool struct{}
+type excelWriteTool struct {
+	workDir string
+}
 
 type excelWriteParams struct {
-	Path string `json:"path" jsonschema:"description=Output path for the .xlsx file. Relative paths resolve to the Documents folder."`
+	Path string `json:"path" jsonschema:"description=Output path for the .xlsx file. Relative paths resolve to the workspace directory."`
 	Data string `json:"data" jsonschema:"description=CSV-formatted text: rows separated by newlines, cells by commas. Quoted fields with embedded commas or newlines are supported."`
 	Sheet string `json:"sheet,omitempty" jsonschema:"description=Sheet name (default: Sheet1)"`
 }
@@ -91,7 +93,10 @@ func (t *excelWriteTool) Execute(ctx context.Context, args json.RawMessage) *ope
 		sheet = "Sheet1"
 	}
 
-	outputPath := resolveOutputPath(strings.TrimSpace(p.Path))
+	outputPath, err := ValidatePath(t.workDir, strings.TrimSpace(p.Path))
+	if err != nil {
+		return openagent.ErrorResult(fmt.Errorf("excel_write: %w", err), false, "")
+	}
 	rowCount, colCount, err := writeExcelFile(outputPath, sheet, p.Data)
 	if err != nil {
 		return officeToolError("excel_write", fmt.Sprintf("failed to write Excel file: %s", err.Error()))
