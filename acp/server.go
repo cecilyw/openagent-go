@@ -1708,12 +1708,21 @@ func (s *AgentServer) OnPrompt(ctx context.Context, req openacp.PromptRequest, s
 	// ── Auto-title from first user message ──
 	if ss.firstPrompt {
 		ss.firstPrompt = false
-		title := firstLine(input.Content, 80)
-		s.updateTitle(ctx, req.SessionID, title)
-
-		sender.SendSessionInfo(title, nil)
+		// Generate a concise title via LLM — it picks the right language
+		// (matching the user's) and a short descriptive label, no truncation.
+		// Falls back to firstLine if the model call fails or times out.
+		// Uses a temporary title immediately so the UI isn't blank while
+		// the LLM call runs; updates to the real title when it returns.
+		fallback := firstLine(input.Content, 80)
+		s.updateTitle(ctx, req.SessionID, fallback)
+		sender.SendSessionInfo(fallback, nil)
 		sender.SendAvailableCommands(s.availableCommands())
 		sender.SendAvailableSkills(s.availableSkills(ss))
+
+		// Async LLM title generation — don't block the turn for it.
+		if m := s.resolveSessionModel(ss); m != nil {
+			go s.generateTitle(req.SessionID, m, input.Content, fallback)
+		}
 	}
 
 	// ── Session-scoped Runtime, reused across turns ──
@@ -1986,6 +1995,52 @@ func (s *AgentServer) updateTitle(ctx context.Context, sessionID openacp.Session
 		if err := s.Runtime.Save(ctx, *info); err != nil {
 			slog.Warn("session meta save failed", "error", err)
 		}
+	}
+}
+
+// generateTitle calls the LLM to produce a concise session title from the
+// first user message. It runs in a goroutine with a 1-minute timeout; on
+// success it updates the session title and pushes sessionInfo to all
+// subscribers. On failure or timeout it keeps the fallback title. The LLM
+// picks the right language (matching the user's) and a short label — no
+// truncation needed.
+func (s *AgentServer) generateTitle(sid openacp.SessionId, model openagent.Model, userMessage, fallback string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	resp, err := model.ChatCompletion(ctx, openagent.ChatCompletionRequest{
+		Messages: []openagent.Message{
+			{Role: openagent.RoleSystem, Content: "The user has started a new conversation. The message below is the first thing they said. " +
+				"Generate a short title (3-10 words) that summarizes what this conversation is about. " +
+				"Use the same language as the user's message. " +
+				"Output ONLY the title — no quotes, no explanation, no punctuation at the end."},
+			{Role: openagent.RoleUser, Content: userMessage},
+		},
+		MaxTokens: 50,
+	})
+	if err != nil {
+		slog.Debug("title generation failed", "session", sid, "error", err)
+		return
+	}
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+		return
+	}
+	title := strings.TrimSpace(resp.Choices[0].Message.Content)
+	// Strip quotes if the model wrapped the title in them.
+	title = strings.Trim(title, `"'`)
+	if title == "" || title == fallback {
+		return
+	}
+
+	// Update the persisted title and notify subscribers.
+	updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer updateCancel()
+	s.renameSession(updateCtx, sid, title)
+	if s.updateSender != nil {
+		s.updateSender.SendSessionUpdate(sid, openacp.SessionUpdate{
+			SessionUpdate: "session_info_update",
+			Title:         &title,
+		})
 	}
 }
 
