@@ -2579,12 +2579,36 @@ func (s *AgentServer) buildSlashContext(ctx context.Context, sid openacp.Session
 				rt = s.buildRuntimeForSession(sid, ss)
 				ss.setRuntime(rt)
 			}
+			// Notify the client that compaction is starting.
+			if s.updateSender != nil {
+				s.updateSender.SendSessionUpdate(sid, openacp.SessionUpdate{
+					SessionUpdate: "context_compacting",
+					Meta:          map[string]any{},
+				})
+			}
 			st, err := rt.CompressAll(ctx, string(sid))
 			if err != nil {
+				// Notify the client that compaction failed.
+				if s.updateSender != nil {
+					s.updateSender.SendSessionUpdate(sid, openacp.SessionUpdate{
+						SessionUpdate: "context_compacted",
+						Meta:          map[string]any{"error": err.Error()},
+					})
+				}
 				return nil, err
 			}
 			if st == nil {
 				return &slash.CompactStats{}, nil // no compressor configured
+			}
+			// Notify the client that compaction finished.
+			if s.updateSender != nil {
+				s.updateSender.SendSessionUpdate(sid, openacp.SessionUpdate{
+					SessionUpdate: "context_compacted",
+					Meta: map[string]any{
+						"compressed_messages": st.Compressed,
+						"freed_tokens":        st.FreedTokens,
+					},
+				})
 			}
 			return &slash.CompactStats{
 				Compressed:    st.Compressed,

@@ -72,8 +72,7 @@ func (s *AgentServer) buildCommandRegistry() *slash.Registry {
 			if st.Compressed == 0 {
 				return "Nothing to compact — session is empty or no summarizer configured.\n", nil
 			}
-			return fmt.Sprintf("Compacted %d messages → summary (freed ~%d tokens).\n",
-				st.Compressed, st.FreedTokens), nil
+			return "Manual context compaction complete.\n", nil
 		})
 
 	r.Register("context", "Show context window usage", nil,
